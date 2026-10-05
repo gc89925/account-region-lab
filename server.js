@@ -97,6 +97,7 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
     let lockedId, lockedAccount;
     try {
       const url = new URL(req.url, `http://${req.headers.host}`);
+      if (req.method === 'GET' && url.pathname === '/api/health') return respond(res, 200, { app: 'account-region-lab', version: VERSION, ready: true });
       if (req.method === 'GET' && url.pathname === '/api/state') return respond(res, 200, snapshot());
       if (req.method === 'GET' && url.pathname === '/api/catalog') return respond(res, 200, await catalog.list(countryCode(url.searchParams.get('country') || 'IN')));
       if (req.method === 'GET' && url.pathname === '/api/export') {

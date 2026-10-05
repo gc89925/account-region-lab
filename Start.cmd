@@ -6,11 +6,14 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-echo Open http://127.0.0.1:4317 in your browser.
 if not exist "node_modules\playwright-core\package.json" (
-  echo Run npm ci --ignore-scripts in this folder first.
-  pause
-  exit /b 1
+  echo Installing dependencies from package-lock.json...
+  call npm ci --ignore-scripts --no-fund --no-audit
+  if errorlevel 1 (
+    echo Dependency installation failed. Please check your network and try again.
+    pause
+    exit /b 1
+  )
 )
-node server.js
-pause
+node scripts/launch.js
+if errorlevel 1 pause

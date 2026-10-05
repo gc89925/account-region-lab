@@ -8,7 +8,8 @@
     "node": ">=24"
   },
   "scripts": {
-    "start": "node server.js",
+    "start": "node scripts/launch.js",
+    "serve": "node server.js",
     "test": "node --test"
   },
   "license": "MIT",
