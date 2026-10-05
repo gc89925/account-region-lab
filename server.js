@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,7 +11,7 @@ import { createCatalog } from './lib/catalog.js';
 import { createPublicProxyCatalog } from './lib/public-proxies.js';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
-const VERSION = '0.2.1';
+const VERSION = '0.2.2';
 
 function respond(res, status, data) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -36,6 +36,8 @@ async function readBody(req) {
 
 export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || defaultDataDir(), probe = probeProxy, launch = launchBrowser, browser = detectBrowser(), managed = createManagedLauncher(), catalog = createCatalog(), publicProxies = createPublicProxyCatalog() } = {}) {
   dataDir = resolve(dataDir);
+  const workspaceId = createHash('sha256').update(process.platform === 'win32' ? dataDir.toLowerCase() : dataDir).digest('hex').slice(0,24);
+  const instanceId = randomBytes(12).toString('hex');
   const release = acquireLock(dataDir);
   const file = join(dataDir, 'state.json');
   let state;
@@ -98,7 +100,7 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
     let lockedId, lockedAccount;
     try {
       const url = new URL(req.url, `http://${req.headers.host}`);
-      if (req.method === 'GET' && url.pathname === '/api/health') return respond(res, 200, { app: 'account-region-lab', version: VERSION, ready: true });
+      if (req.method === 'GET' && url.pathname === '/api/health') return respond(res, 200, { app: 'account-region-lab', version: VERSION, ready: true, workspaceId, instanceId });
       if (req.method === 'GET' && url.pathname === '/api/state') return respond(res, 200, snapshot());
       if (req.method === 'GET' && url.pathname === '/api/proxies') return respond(res,200,await publicProxies.list((url.searchParams.get('country') || 'ALL').toUpperCase()));
       if (req.method === 'GET' && url.pathname === '/api/catalog') {
@@ -113,6 +115,11 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
       if (['POST', 'PATCH'].includes(req.method)) {
         if (req.headers['x-lab-token'] !== token) return respond(res, 403, { error: '会话令牌无效，请刷新本地页面。' });
         const body = await readBody(req);
+        if (req.method === 'POST' && url.pathname === '/api/shutdown') {
+          if (body.instanceId !== instanceId) return respond(res,409,{error:'实例已变化，请重新尝试停止。'});
+          res.once('finish', () => setImmediate(() => close().catch(() => console.error('Unable to close the local service cleanly.'))));
+          return respond(res,202,{ok:true});
+        }
         if (req.method === 'POST' && url.pathname === '/api/proxies/check') return respond(res,200,await publicProxies.check(body.id,body.country));
         if (req.method === 'POST' && url.pathname === '/api/profiles') {
           if (state.profiles.length >= 100) throw new Error('第一版最多支持 100 个环境。');
@@ -216,10 +223,16 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
   server.requestTimeout = 30000;
   server.headersTimeout = 15000;
   server.on('close', release);
-  return { server, token, close: async () => { await managed.closeAll(); return new Promise((resolveClose, reject) => {
-    server.close(err => { release(); err ? reject(err) : resolveClose(); });
-    server.closeIdleConnections();
-  }); } };
+  let closing;
+  const close = () => closing ||= (async () => {
+    await managed.closeAll();
+    if (!server.listening) { release(); return; }
+    return new Promise((resolveClose, reject) => {
+      server.close(err => { release(); err ? reject(err) : resolveClose(); });
+      server.closeIdleConnections();
+    });
+  })();
+  return { server, token, close };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

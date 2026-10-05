@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.2 — 2026-10-06
+
+- Background launcher, explicit Stop/Status commands, persistent service logs, and a shared local data-directory configuration.
+- Workspace and instance checks prevent reusing or stopping an unrelated process.
+- Optional current-user Windows logon task with bounded failure restart and an uninstall command.
+
 ## 0.2.1 — 2026-10-05
 
 - Explicit Google sign-in action, missing-proxy setup guidance, persistent action feedback, and visible device-dialog errors.

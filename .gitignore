@@ -13,3 +13,4 @@ account-region-observations*.json
 *.zip
 *.tmp
 .DS_Store
+launcher.local.json
