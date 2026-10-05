@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <meta name="theme-color" content="#1e493e">
+    <title>账号地区实验室 · Account Region Lab</title>
+    <link rel="stylesheet" href="/style.css">
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主要内容</a>
+    <header class="site-header">
+      <a class="brand" href="#main" aria-label="账号地区实验室首页">
+        <span class="brand-mark" aria-hidden="true">ar<span>↗</span></span>
+        <span><strong>Account Region Lab</strong><small>账号地区实验室</small></span>
+      </a>
+      <nav class="main-nav" aria-label="主导航">
+        <a href="#environments" class="nav-active">独立环境</a>
+        <a href="#observations">观察记录</a>
+        <a href="#method">使用说明</a>
+      </nav>
+      <span class="local-badge"><span></span>仅在本机运行</span>
+    </header>
+
+    <main id="main" class="workspace">
+      <section class="hero" aria-labelledby="page-title">
+        <div class="hero-copy">
+          <p class="eyebrow">YOUR ACCOUNTS. THEIR OWN SPACE.</p>
+          <h1 id="page-title">每个账号，<br>一个独立环境<span>。</span></h1>
+          <p class="hero-description">分开浏览器配置，检查网络出口，记录真实地区。<br>把账号的日常使用与地区观察，放在同一个清晰的工作台。</p>
+          <div class="hero-actions">
+            <button id="new-profile" class="button button-primary" type="button"><span aria-hidden="true">＋</span> 新建环境</button>
+            <a class="button button-quiet" href="#method">先了解工作方式 <span aria-hidden="true">↗</span></a>
+          </div>
+        </div>
+        <aside class="experiment-note" aria-label="实验边界">
+          <div class="note-top"><span class="note-icon" aria-hidden="true">◷</span><span class="eyebrow">OBSERVE, THEN REVIEW</span></div>
+          <div class="note-number">7<span>天</span></div>
+          <h2>一个观察周期</h2>
+          <p>七天是本工具的复查节奏，<strong>不是 Google 官方的改区资格或成功承诺。</strong></p>
+          <div class="note-footer"><span aria-hidden="true">↳</span> 以登录后的 Google 服务条款页为准</div>
+        </aside>
+      </section>
+
+      <div id="connection-error" class="connection-error" role="alert" hidden></div>
+
+      <section class="overview" aria-label="工作区概况">
+        <div class="overview-stat"><span class="stat-label">独立环境</span><strong id="stat-profiles">—</strong><span id="stat-configured" class="stat-description">等待加载</span></div>
+        <div class="overview-stat"><span class="stat-label">出口符合目标</span><strong id="stat-healthy">—</strong><span class="stat-description">仅依据最近一次网络检查</span></div>
+        <div class="overview-stat"><span class="stat-label">待复查</span><strong id="stat-reviews">—</strong><span class="stat-description">已满七天的观察周期</span></div>
+        <div class="browser-stat"><span class="browser-icon" aria-hidden="true">◎</span><div><span class="stat-label">本机浏览器</span><strong id="browser-name">正在检测…</strong><span id="browser-hint" class="stat-description">使用独立配置目录打开</span></div></div>
+      </section>
+
+      <section id="environments" class="section-block" aria-labelledby="environments-title">
+        <div class="section-heading"><div><p class="eyebrow">01 / ENVIRONMENTS</p><h2 id="environments-title">独立环境</h2></div><button id="refresh" class="button button-small button-outline" type="button"><span aria-hidden="true">↻</span> 刷新状态</button></div>
+        <div id="profile-grid" class="profile-grid" aria-live="polite"><div class="empty-state loading-state">正在读取本机环境…</div></div>
+        <p class="section-footnote"><span aria-hidden="true">↳</span> 每个环境有独立的浏览器配置与会话；它不是虚拟机，也不能保证改变账号关联地区。</p>
+      </section>
+
+      <section id="observations" class="section-block" aria-labelledby="observations-title">
+        <div class="section-heading"><div><p class="eyebrow">02 / FIELD NOTES</p><h2 id="observations-title">观察记录</h2><p>手动记录条款页显示的账号关联国家/地区，保留每次变化的依据。</p></div><a href="/api/export" class="button button-small button-outline" download>导出记录 <span aria-hidden="true">↓</span></a></div>
+        <div class="table-panel"><div class="table-scroll"><table><thead><tr><th scope="col">观察时间</th><th scope="col">环境</th><th scope="col">条款页关联地区</th><th scope="col">备注</th></tr></thead><tbody id="observation-rows"></tbody></table></div><div id="observation-empty" class="empty-state" hidden><span class="empty-icon" aria-hidden="true">≡</span><h3>第一条观察，从条款页开始</h3><p>在环境卡片中打开条款页，登录并确认地区后，点击“记录地区”。</p></div></div>
+      </section>
+
+      <section id="method" class="method-panel" aria-labelledby="method-title">
+        <div class="method-intro"><p class="eyebrow">03 / HOW IT WORKS</p><h2 id="method-title">分开使用，<br>如实观察。</h2><p>这个工作台帮助你管理环境与证据。<br>地区判断和申诉结果由 Google 决定。</p></div>
+        <ol class="method-steps">
+          <li><span>01</span><div><h3>配置每个环境的网络</h3><p>为印度、尼日利亚分别填写已有代理的本地转发地址，先检查实际出口国家。出口匹配不等于账号地区已改变。</p></div></li>
+          <li><span>02</span><div><h3>登录并正常使用</h3><p>从对应环境打开 Gmail 或 YouTube，自己完成登录与使用。工具不保存密码、不自动刷浏览或观看行为。</p></div></li>
+          <li><span>03</span><div><h3>记录条款页，按周期复查</h3><p>记录登录后条款页显示的地区。必要时在同一环境打开官方变更申请，按实际情况填写。</p><a id="faq-link" class="text-link" target="_blank" rel="noopener noreferrer" hidden>Google 官方国家/地区说明 <span aria-hidden="true">↗</span></a></div></li>
+        </ol>
+      </section>
+      <footer class="site-footer"><span>ACCOUNT REGION LAB <span id="app-version"></span></span><span>本机配置 · 人工观察 · 数据可导出</span></footer>
+    </main>
+
+    <dialog id="profile-dialog" class="modal" aria-labelledby="profile-dialog-title">
+      <form id="profile-form">
+        <div class="modal-heading"><div><p class="eyebrow">ENVIRONMENT SETTINGS</p><h2 id="profile-dialog-title">新建环境</h2></div><button class="icon-button" type="button" data-close="profile-dialog" aria-label="关闭环境设置">×</button></div>
+        <p class="modal-intro">一个环境对应一个账号。请在浏览器中完成 Google 登录。</p>
+        <label for="profile-label">环境名称</label><input id="profile-label" name="label" required maxlength="80" placeholder="例如：印度 · 工作账号" autocomplete="off">
+        <label for="profile-country">目标国家/地区 <span class="field-optional">两位国家代码</span></label><input id="profile-country" name="country" required pattern="[A-Za-z]{2}" maxlength="2" list="country-options" placeholder="IN" autocomplete="off" class="country-input" aria-describedby="country-help"><p id="country-help" class="field-help">印度 IN · 尼日利亚 NG · 中国 CN</p>
+        <label for="profile-proxy">代理地址 <span class="field-optional">可稍后配置</span></label><input id="profile-proxy" name="proxy" maxlength="256" placeholder="socks5://127.0.0.1:1081" autocomplete="off" spellcheck="false" aria-describedby="proxy-help"><p id="proxy-help" class="field-help">支持 http://主机:端口 或 socks5://主机:端口。需要认证的代理请先使用本地转发器；此处不接收用户名或密码。</p>
+        <div id="profile-binding-note" class="form-note">首次打开浏览器后，环境将固定绑定国家与代理地址。需要切换线路时，请新建一个环境。</div>
+        <p id="profile-form-error" class="form-error" role="alert" hidden></p>
+        <div class="modal-actions"><button class="button button-outline" type="button" data-close="profile-dialog">取消</button><button id="profile-submit" class="button button-primary" type="submit">创建环境</button></div>
+      </form>
+    </dialog>
+
+    <dialog id="observation-dialog" class="modal" aria-labelledby="observation-dialog-title">
+      <form id="observation-form">
+        <div class="modal-heading"><div><p class="eyebrow">ADD A FIELD NOTE</p><h2 id="observation-dialog-title">记录账号关联地区</h2></div><button class="icon-button" type="button" data-close="observation-dialog" aria-label="关闭观察记录">×</button></div>
+        <p id="observation-context" class="modal-intro"></p>
+        <label for="observation-country">条款页实际显示的国家/地区</label><input id="observation-country" name="country" required pattern="[A-Za-z]{2}" maxlength="2" list="country-options" placeholder="例如：中国 CN" autocomplete="off" class="country-input" aria-describedby="observation-help"><p id="observation-help" class="field-help">填写 Google 服务条款页的“账号关联国家/地区”，不要填写代理出口位置。</p>
+        <label for="observation-note">观察备注 <span class="field-optional">可选</span></label><textarea id="observation-note" name="note" rows="4" maxlength="1000" placeholder="例如：条款页仍显示中国；已提交变更申请。"></textarea>
+        <p id="observation-form-error" class="form-error" role="alert" hidden></p>
+        <div class="modal-actions"><button class="button button-outline" type="button" data-close="observation-dialog">取消</button><button id="observation-submit" class="button button-primary" type="submit">保存观察</button></div>
+      </form>
+    </dialog>
+    <datalist id="country-options"><option value="IN">印度</option><option value="NG">尼日利亚</option><option value="CN">中国</option><option value="US">美国</option><option value="GB">英国</option><option value="JP">日本</option><option value="SG">新加坡</option><option value="DE">德国</option><option value="CA">加拿大</option><option value="AU">澳大利亚</option></datalist>
+    <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
+  </body>
+</html>
