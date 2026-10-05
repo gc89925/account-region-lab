@@ -19,6 +19,7 @@
       <nav class="main-nav" aria-label="主导航">
         <a href="#environments" class="nav-active">独立环境</a>
         <a href="#observations">观察记录</a>
+        <a href="#catalog">公共节点</a>
         <a href="#method">使用说明</a>
       </nav>
       <span class="local-badge"><span></span>仅在本机运行</span>
@@ -64,15 +65,26 @@
         <div class="table-panel"><div class="table-scroll"><table><thead><tr><th scope="col">观察时间</th><th scope="col">环境</th><th scope="col">条款页关联地区</th><th scope="col">备注</th></tr></thead><tbody id="observation-rows"></tbody></table></div><div id="observation-empty" class="empty-state" hidden><span class="empty-icon" aria-hidden="true">≡</span><h3>第一条观察，从条款页开始</h3><p>在环境卡片中打开条款页，登录并确认地区后，点击“记录地区”。</p></div></div>
       </section>
 
+      <section id="catalog" class="section-block" aria-labelledby="catalog-title">
+        <div class="section-heading"><div><p class="eyebrow">03 / PUBLIC NETWORK DIRECTORY</p><h2 id="catalog-title">公共节点目录</h2><p>按需读取 VPN Gate 官方志愿者目录，帮助你了解线路供给。</p></div><button id="configure-fanout" class="button button-small button-outline" type="button">配置已有 fanout 出口 ↗</button></div>
+        <div class="catalog-panel">
+          <div class="catalog-controls"><label for="catalog-country">查询国家</label><select id="catalog-country"><option value="IN">印度 · IN</option><option value="NG">尼日利亚 · NG</option></select><button id="load-catalog" class="button button-primary" type="button">加载公共节点</button><span id="catalog-status" class="field-help" aria-live="polite">尚未请求目录</span></div>
+          <p class="catalog-note">公共节点的住宅属性未验证，在线状态与出口可能变化。这里列出的是 VPN / OpenVPN 服务；需要你通过 VPN 客户端或 fanout 转为本地 SOCKS5，再配置到独立环境。目录不会替你连接或自动切换代理。</p>
+          <p id="catalog-error" class="form-error" role="alert" hidden></p>
+          <div id="catalog-results" aria-live="polite"><div class="catalog-empty">选择国家后加载。没有本国节点时会明确显示 0 个。</div></div>
+          <div class="catalog-links"><a href="https://www.vpngate.net/" target="_blank" rel="noopener noreferrer">VPN Gate 官方目录 ↗</a><a href="https://github.com/byJoey/fanout" target="_blank" rel="noopener noreferrer">了解 fanout ↗</a></div>
+        </div>
+      </section>
+
       <section id="method" class="method-panel" aria-labelledby="method-title">
-        <div class="method-intro"><p class="eyebrow">03 / HOW IT WORKS</p><h2 id="method-title">分开使用，<br>如实观察。</h2><p>这个工作台帮助你管理环境与证据。<br>地区判断和申诉结果由 Google 决定。</p></div>
+        <div class="method-intro"><p class="eyebrow">04 / HOW IT WORKS</p><h2 id="method-title">分开使用，<br>如实观察。</h2><p>这个工作台帮助你管理环境与证据。<br>地区判断和申诉结果由 Google 决定。</p></div>
         <ol class="method-steps">
           <li><span>01</span><div><h3>配置每个环境的网络</h3><p>为印度、尼日利亚分别填写已有代理的本地转发地址，先检查实际出口国家。出口匹配不等于账号地区已改变。</p></div></li>
-          <li><span>02</span><div><h3>登录并正常使用</h3><p>从对应环境打开 Gmail 或 YouTube，自己完成登录与使用。工具不保存密码、不自动刷浏览或观看行为。</p></div></li>
+          <li><span>02</span><div><h3>登录，核查设备，再正常使用</h3><p>从对应环境打开 Gmail 或 YouTube，自己完成登录。使用“检查 / 退出其他设备”进入 Google 官方页面逐项退出其他会话，并保留当前会话；工具只保存你的人工核查记录。</p></div></li>
           <li><span>03</span><div><h3>记录条款页，按周期复查</h3><p>记录登录后条款页显示的地区。必要时在同一环境打开官方变更申请，按实际情况填写。</p><a id="faq-link" class="text-link" target="_blank" rel="noopener noreferrer" hidden>Google 官方国家/地区说明 <span aria-hidden="true">↗</span></a></div></li>
         </ol>
       </section>
-      <footer class="site-footer"><span>ACCOUNT REGION LAB <span id="app-version"></span></span><span>本机配置 · 人工观察 · 数据可导出</span></footer>
+      <footer class="site-footer"><span>ACCOUNT REGION LAB <span id="app-version"></span></span><a href="https://github.com/gc89925/account-region-lab" target="_blank" rel="noopener noreferrer">GitHub 项目 ↗</a><span>本机配置 · 人工观察 · 数据可导出</span></footer>
     </main>
 
     <dialog id="profile-dialog" class="modal" aria-labelledby="profile-dialog-title">
@@ -80,11 +92,35 @@
         <div class="modal-heading"><div><p class="eyebrow">ENVIRONMENT SETTINGS</p><h2 id="profile-dialog-title">新建环境</h2></div><button class="icon-button" type="button" data-close="profile-dialog" aria-label="关闭环境设置">×</button></div>
         <p class="modal-intro">一个环境对应一个账号。请在浏览器中完成 Google 登录。</p>
         <label for="profile-label">环境名称</label><input id="profile-label" name="label" required maxlength="80" placeholder="例如：印度 · 工作账号" autocomplete="off">
+        <label for="profile-account">账号代号 <span class="field-optional">可选，仅保存在本机</span></label><input id="profile-account" name="accountLabel" maxlength="80" placeholder="例如：work-in-01，无需填写邮箱" autocomplete="off"><p class="field-help">相同代号用于避免在本应用中同时启动多个受控环境；不会读取登录身份，也不管理外部设备。</p>
         <label for="profile-country">目标国家/地区 <span class="field-optional">两位国家代码</span></label><input id="profile-country" name="country" required pattern="[A-Za-z]{2}" maxlength="2" list="country-options" placeholder="IN" autocomplete="off" class="country-input" aria-describedby="country-help"><p id="country-help" class="field-help">印度 IN · 尼日利亚 NG · 中国 CN</p>
         <label for="profile-proxy">代理地址 <span class="field-optional">可稍后配置</span></label><input id="profile-proxy" name="proxy" maxlength="256" placeholder="socks5://127.0.0.1:1081" autocomplete="off" spellcheck="false" aria-describedby="proxy-help"><p id="proxy-help" class="field-help">支持 http://主机:端口 或 socks5://主机:端口。需要认证的代理请先使用本地转发器；此处不接收用户名或密码。</p>
-        <div id="profile-binding-note" class="form-note">首次打开浏览器后，环境将固定绑定国家与代理地址。需要切换线路时，请新建一个环境。</div>
+        <label class="check-label" for="profile-strict-ip"><input id="profile-strict-ip" name="strictIp" type="checkbox" checked><span>严格绑定出口 IP</span></label><p class="field-help">首次出口检查通过并启动浏览器后绑定实际出口；之后 IP 变化即拦截。关闭后仍会核对出口国家。</p>
+        <details id="environment-details" class="environment-details"><summary>浏览器环境设置 <span>语言、时区与视口</span></summary>
+          <label for="environment-engine">运行方式</label><select id="environment-engine"><option value="native">原生 Chrome / Edge · 兼容模式</option><option value="managed">受控浏览器 · 实验模式</option></select>
+          <p id="environment-engine-help" class="field-help"></p>
+          <div class="field-grid"><div><label for="environment-locale">语言与地区</label><input id="environment-locale" required maxlength="35" value="en-IN" placeholder="en-IN"></div><div><label for="environment-timezone">时区</label><input id="environment-timezone" required maxlength="80" value="Asia/Kolkata" placeholder="Asia/Kolkata"></div></div>
+          <div class="field-grid"><div><label for="environment-width">视口宽度</label><input id="environment-width" type="number" required min="800" max="3840" step="1" value="1365"></div><div><label for="environment-height">视口高度</label><input id="environment-height" type="number" required min="600" max="2160" step="1" value="900"></div></div>
+          <label for="environment-color">外观</label><select id="environment-color"><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option></select>
+          <p class="field-help">每个环境使用独立配置目录，分隔 Cookie 与存储。设置不会伪造 Canvas / WebGL 指纹，也不会模拟观看或浏览行为。</p>
+        </details>
+        <div id="profile-binding-note" class="form-note">首次打开浏览器（包括环境诊断）后，国家、代理与浏览器设置固定绑定。需要切换时请新建环境。</div>
         <p id="profile-form-error" class="form-error" role="alert" hidden></p>
         <div class="modal-actions"><button class="button button-outline" type="button" data-close="profile-dialog">取消</button><button id="profile-submit" class="button button-primary" type="submit">创建环境</button></div>
+      </form>
+    </dialog>
+    <dialog id="devices-dialog" class="modal" aria-labelledby="devices-dialog-title">
+      <form id="devices-form">
+        <div class="modal-heading"><div><p class="eyebrow">REVIEW YOUR GOOGLE SESSIONS</p><h2 id="devices-dialog-title">检查 / 退出其他设备</h2></div><button class="icon-button" type="button" data-close="devices-dialog" aria-label="关闭设备核查">×</button></div>
+        <p id="devices-context" class="modal-intro"></p>
+        <ol class="device-steps"><li>在此环境中打开 Google 的“你的设备”页面，确认当前登录的是目标账号。</li><li>逐一查看其他设备及会话，按你的判断使用 Google 提供的“退出登录”。同一设备可能有多个会话。</li><li>保留正在使用的会话，完成后回到这里记录核查结果。</li></ol>
+        <button id="open-devices" class="button button-primary" type="button">在此环境打开官方设备页 ↗</button>
+        <p class="form-note">这个按钮打开官方管理页。工具不能自动检测 Google 登录身份，也不能一键替你退出所有其他设备。退出会话不保证更改账号关联地区。</p>
+        <label class="check-label" for="devices-signed-out"><input id="devices-signed-out" type="checkbox"><span>我已核查，并退出需要移除的其他会话</span></label>
+        <label class="check-label" for="devices-current-kept"><input id="devices-current-kept" type="checkbox"><span>我已确认保留当前使用的会话</span></label>
+        <label for="devices-note">核查备注 <span class="field-optional">可选</span></label><textarea id="devices-note" rows="3" maxlength="1000" placeholder="例如：已退出旧电脑会话，手机会话仍保留。"></textarea>
+        <p id="devices-form-error" class="form-error" role="alert" hidden></p>
+        <div class="modal-actions"><button class="button button-outline" type="button" data-close="devices-dialog">取消</button><button id="devices-submit" class="button button-primary" type="submit">保存人工核查记录</button></div>
       </form>
     </dialog>
 

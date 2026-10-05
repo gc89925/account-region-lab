@@ -1,0 +1,12 @@
+# Security
+
+This is an experimental, single-user local application. It binds only to `127.0.0.1`. Do not expose its port through a public tunnel or reverse proxy.
+
+- Browser profiles contain signed-in sessions. Keep the data directory outside the repository and under your own OS account.
+- The control API validates Host, Origin and a per-process mutation token. This does not protect against malicious software already running as your OS user.
+- Managed mode uses Playwright with your installed Chrome or Edge. It exposes no remote-debugging TCP endpoint; it is not a stealth browser or VM.
+- The official VPN Gate directory is retrieved only on request. No directory node is automatically connected to or trusted as residential. The app does not execute downloaded VPN configurations.
+- The proxy check contacts country.is through the configured proxy. It is a point-in-time check, not a system firewall or continuous network kill switch.
+- Exports remove proxy endpoints, detected IPs, pinned IPs and local account codes. User-supplied labels and notes remain and require review before sharing.
+
+If GitHub private vulnerability reporting is enabled, use the repository's Security tab. Otherwise open an issue asking for a private reporting channel without posting exploit details, credentials or personal data. Do not send live Google cookies or proxy secrets.

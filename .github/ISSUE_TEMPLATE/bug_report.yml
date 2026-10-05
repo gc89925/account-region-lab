@@ -1,0 +1,21 @@
+name: Bug report / 问题反馈
+description: Report reproducible behavior without sharing accounts or credentials.
+body:
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps and expected result / 复现步骤和预期结果
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: OS, Node, browser, app version / 系统和版本
+      description: Do not include email addresses, proxy credentials, cookies, or profile directories.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result / 实际结果
+      description: Redact private data before attaching screenshots or logs.

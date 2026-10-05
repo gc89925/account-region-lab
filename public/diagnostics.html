@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>环境诊断 · Account Region Lab</title>
+  <link rel="stylesheet" href="diagnostics.css">
+  <script defer src="diagnostics.js"></script>
+</head>
+<body>
+  <main>
+    <div class="eyebrow">ACCOUNT REGION LAB · LOCAL DIAGNOSTICS</div>
+    <header><div><h1>看见浏览器实际提供的环境</h1><p>本页只读取当前浏览器的公开接口。不会连接服务器、探测出口 IP、发送 STUN 请求或读取账号信息。</p></div><button id="download" type="button" disabled>下载诊断 JSON</button></header>
+    <div id="status" role="status">正在读取环境…</div>
+    <section aria-labelledby="comparison-title"><h2 id="comparison-title">配置与实测</h2><p id="expected-note"></p><div class="table-wrap"><table><thead><tr><th>项目</th><th>配置值</th><th>实测值</th><th>结果</th></tr></thead><tbody id="comparison"></tbody></table></div></section>
+    <section aria-labelledby="details-title"><h2 id="details-title">当前浏览器信息</h2><dl id="details"></dl></section>
+    <aside><strong>如何理解结果</strong><p>通过诊断表示本页读到的设置一致，不代表设备指纹完全隔离，也不能证明 Google 已更改账号地区。操作系统、GPU、字体与其他硬件特征可能仍由多个环境共享。</p><p>WebRTC 的禁用非代理 UDP 策略由启动器设置，本页没有验证网络流量。浏览器语言、时区和窗口配置也不会改变实际网络出口。</p><p>启动器不主动授予定位、摄像头和麦克风权限；此处展示的是诊断页所在来源的权限状态，不代表 Google 页面的权限。请在各站点分别检查权限。</p><p>导出的 JSON 包含本页列出的浏览器与硬件信息；分享前请自行检查。</p></aside>
+  </main>
+</body>
+</html>

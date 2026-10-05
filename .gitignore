@@ -4,6 +4,11 @@ node_modules/
 !.env.example
 data/
 profiles/
+state.json
+.server.lock
+Downloads/
+browser-diagnostics-*.json
+account-region-observations*.json
 *.log
 *.zip
 *.tmp

@@ -7,5 +7,10 @@ if errorlevel 1 (
   exit /b 1
 )
 echo Open http://127.0.0.1:4317 in your browser.
+if not exist "node_modules\playwright-core\package.json" (
+  echo Run npm ci --ignore-scripts in this folder first.
+  pause
+  exit /b 1
+)
 node server.js
 pause
