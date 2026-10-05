@@ -6,7 +6,8 @@ This is an experimental, single-user local application. It binds only to `127.0.
 - The control API validates Host, Origin and a per-process mutation token. This does not protect against malicious software already running as your OS user.
 - Managed mode uses Playwright with your installed Chrome or Edge. It exposes no remote-debugging TCP endpoint; it is not a stealth browser or VM.
 - The official VPN Gate directory is retrieved only on request. No directory node is automatically connected to or trusted as residential. The app does not execute downloaded VPN configurations.
-- The proxy check contacts country.is through the configured proxy. It is a point-in-time check, not a system firewall or continuous network kill switch.
-- Exports remove proxy endpoints, detected IPs, pinned IPs and local account codes. User-supplied labels and notes remain and require review before sharing.
+- The proxy check contacts country.is (or bounded fallback ipwho.is) through the configured proxy. Catalog checks and explicit diagnostics also contact Google's login endpoint. It is a point-in-time check, not a system firewall or continuous network kill switch.
+- Windows SOCKS5 credentials are encrypted with current-user DPAPI. Passwords are passed to the protector via stdin, never command arguments, and excluded from API responses and exports. A per-profile SOCKS5 bridge binds only to loopback, authenticates to the configured upstream and has no direct fallback; it is available to other processes on the same machine. Standard SOCKS5 username/password authentication does not itself encrypt the upstream transport. Use a trusted transport/provider.
+- Exports remove proxy endpoints, proxy usernames and credential envelopes, detected IPs, pinned IPs and local account codes. User-supplied labels and notes remain and require review before sharing.
 
 If GitHub private vulnerability reporting is enabled, use the repository's Security tab. Otherwise open an issue asking for a private reporting channel without posting exploit details, credentials or personal data. Do not send live Google cookies or proxy secrets.

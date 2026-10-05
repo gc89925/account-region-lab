@@ -15,11 +15,13 @@ npm ci --ignore-scripts
 npm start
 ```
 
-Open `http://127.0.0.1:4317`. The interface is currently Chinese. India and Nigeria are unconfigured starting profiles. Configure your own HTTP/SOCKS5 endpoint, then check the route before opening an account. Enter passwords only into Google's actual browser page.
+Open `http://127.0.0.1:4317`. The interface is currently Chinese. India and Nigeria are unconfigured starting profiles. Configure your own HTTP/SOCKS5 endpoint, then diagnose the route before opening an account. Enter Google passwords only into Google's actual browser page. On Windows, SOCKS5 proxy credentials have separate fields and are encrypted using current-user DPAPI; the browser uses a loopback authentication bridge. HTTP authentication and other operating systems currently require a local proxy client.
 
 ## Features
 
 - Independent persistent browser directories and per-profile proxies.
+- Actionable authentication/protocol/target diagnostics and explicitly applied protocol suggestions, with no direct-network fallback.
+- Public-proxy batches of up to 30 candidates, at most three concurrent checks, progress/cancellation, and a default view of country/Google checks passed within two minutes. No verified residential IP supply is promised.
 - Country checks before each external launch; optional strict IP pinning blocks a changed IP even in the same country. This is not continuous network enforcement.
 - Native Chrome/Edge mode, or experimental Playwright-managed mode with locale, timezone, viewport and color-scheme settings. Managed mode does not hide `navigator.webdriver` and may be incompatible with Google sign-in.
 - Local diagnostics comparing requested and observed settings without network, telemetry or STUN requests.
@@ -32,7 +34,7 @@ Open `http://127.0.0.1:4317`. The interface is currently Chinese. India and Nige
 
 Profiles are not VMs. The app does not spoof Canvas/WebGL, fabricate activity, bypass login challenges, or submit country appeals. Google may use signals unrelated to the current proxy.
 
-Data lives in the OS user application-data directory outside the source checkout. Set `REGION_LAB_DATA_DIR`, `BROWSER_PATH` or `PORT` when necessary. Never publish cookies, profiles, emails, proxy credentials or personal notes. Managed downloads may be cleaned up when the context closes; save important files yourself.
+Data lives in the OS user application-data directory outside the source checkout. Set `REGION_LAB_DATA_DIR`, `BROWSER_PATH` or `PORT` when necessary. Never publish cookies, profiles, emails, proxy credentials or personal notes. Passwords and encrypted credential data are omitted from API responses, exports and browser arguments; usernames are visible only in local settings and omitted from exports. DPAPI data must be re-entered on another Windows account/machine. Stopping the service interrupts authenticated proxy bridges; restarting restores their saved local ports. Managed downloads may be cleaned up when the context closes; save important files yourself.
 
 ## Development
 

@@ -9,6 +9,11 @@ let observingProfileId = null;
 let reviewingProfileId = null;
 let loadingState = false;
 let loadingCatalog = false;
+let catalogData = null;
+let scanState = { state: 'idle', running: false };
+let scanPollTimer = null;
+let scanRequestPending = false;
+let diagnosisSequence = 0;
 const pending = new Set();
 const operationStates = new Map();
 const proxyChecks = new Map();
@@ -82,7 +87,7 @@ async function api(path, options = {}) {
     headers['X-Lab-Token'] = state.token;
   }
   const controller = new AbortController();
-  const timeoutMs = path.endsWith('/launch') ? 120000 : path === '/api/proxies/check' ? 55000 : 25000;
+  const timeoutMs = path.endsWith('/launch') ? 120000 : path === '/api/proxy/diagnose' ? 100000 : path === '/api/proxies/check' ? 55000 : 25000;
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(path, { cache: 'no-store', ...options, headers, signal: controller.signal });
@@ -92,7 +97,7 @@ async function api(path, options = {}) {
     return data;
   } catch (error) {
     if (controller.signal.aborted) throw new Error(`请求超过 ${timeoutMs / 1000} 秒。代理检查或浏览器启动未及时返回；请检查线路，然后刷新状态确认结果，避免重复启动。`);
-    if (error instanceof TypeError) throw new Error('无法连接本地服务。请双击 Start.cmd，保留启动窗口，再点击“刷新状态”。');
+    if (error instanceof TypeError) throw new Error('无法连接本地服务。请双击 Start.cmd，等待启动完成后再点击“刷新状态”；无需保留终端窗口。');
     throw error;
   } finally {
     window.clearTimeout(timer);
@@ -376,6 +381,16 @@ function openProfileDialog(profile = null, defaults = {}) {
   $('#profile-country').value = values.country || defaults.country || 'US';
   $('#profile-proxy').value = values.proxy || defaults.proxy || '';
   $('#profile-proxy').placeholder = defaults.fanout ? 'socks5://127.0.0.1:1080' : 'socks5://127.0.0.1:1081';
+  $('#proxy-username').value = values.proxyUsername || '';
+  $('#proxy-password').value = '';
+  $('#proxy-password').placeholder = profile?.proxyAuthConfigured ? '已保存；留空保留原密码' : '代理服务提供的密码';
+  $('#clear-proxy-auth-label').hidden = !profile?.proxyAuthConfigured;
+  $('#clear-proxy-auth').checked = false;
+  $('#proxy-auth-help').textContent = defaults.template && values.proxyAuthConfigured
+    ? '代理用户名已复制；请重新填写密码。原环境的密码不会复制到此表单。'
+    : profile?.proxyAuthConfigured ? '由当前 Windows 用户加密保存。用户名与地址不变时，密码留空保留原密码；不会放入浏览器命令行或导出记录。'
+      : '填写代理商提供的凭据，不是 Google 密码。由当前 Windows 用户加密保存，不会放入浏览器命令行或导出记录。';
+  resetProxyDiagnosis();
   $('#profile-strict-ip').checked = values.strictIp !== false;
   const environment = values.environment || {};
   const localeDefaults = environmentDefaults[$('#profile-country').value] || { locale: 'en-US', timezoneId: 'UTC' };
@@ -387,7 +402,7 @@ function openProfileDialog(profile = null, defaults = {}) {
   $('#environment-color').value = environment.colorScheme || 'system';
   $('#environment-details').open = false;
   const isBound = profileLocked(profile);
-  ['profile-country', 'profile-proxy', 'profile-strict-ip', 'environment-engine', 'environment-locale', 'environment-timezone', 'environment-width', 'environment-height', 'environment-color'].forEach((id) => { document.getElementById(id).disabled = isBound; });
+  ['profile-country', 'profile-proxy', 'proxy-username', 'proxy-password', 'clear-proxy-auth', 'profile-strict-ip', 'environment-engine', 'environment-locale', 'environment-timezone', 'environment-width', 'environment-height', 'environment-color'].forEach((id) => { document.getElementById(id).disabled = isBound; });
   $('#profile-binding-note').textContent = isBound
     ? `这个环境已启动过浏览器，国家、代理、IP 绑定选项和浏览器设置已固定。${profile?.session?.active ? '关闭受控浏览器后可修改账号代号。' : '仍可修改名称与账号代号。'}需要更换设置时请新建环境。`
     : '首次打开浏览器（包括环境诊断）后，国家、代理与浏览器设置固定。严格 IP 绑定会在首次出口检查通过并启动浏览器后记录出口。';
@@ -423,6 +438,9 @@ function profileFormBody() {
   if (!profileLocked(profile)) Object.assign(body, {
     country: $('#profile-country').value.trim().toUpperCase(),
     proxy: $('#profile-proxy').value.trim(),
+    proxyUsername: $('#proxy-username').value.trim(),
+    proxyPassword: $('#proxy-password').value,
+    clearProxyAuth: $('#clear-proxy-auth').checked,
     strictIp: $('#profile-strict-ip').checked,
     environment: {
       engine: $('#environment-engine').value,
@@ -435,14 +453,104 @@ function profileFormBody() {
   return body;
 }
 
+function resetProxyDiagnosis() {
+  diagnosisSequence += 1;
+  $('#proxy-diagnosis').hidden = true;
+  $('#proxy-diagnosis').replaceChildren();
+  $('#diagnose-proxy').disabled = false;
+  $('#diagnose-proxy').textContent = '诊断代理';
+}
+
+function renderProxyDiagnosis(result, input) {
+  const panel = $('#proxy-diagnosis');
+  panel.hidden = false;
+  panel.replaceChildren();
+  const error = typeof result.error === 'object' ? result.error : { message: result.error };
+  const stageNames = { setup: '配置', proxy_dns: '代理地址解析', proxy_connect: '连接代理端口', connection: '连接代理端口', proxy_protocol: '代理协议握手', protocol: '代理协议握手', proxy_auth: '代理认证', authentication: '代理认证', target_dns: '目标域名解析', target_connect: '代理连接目标', tls: 'HTTPS 证书握手', probe_service: '出口查询', timeout: '请求超时' };
+  const passed = result.ok === true && result.googleReachable === true && result.targetCountryMatches !== false;
+  const title = passed ? '代理诊断通过' : result.ok ? '代理已连通，仍需处理以下检查' : `诊断停在：${stageNames[error?.stage] || '连接代理'}`;
+  panel.append(element('strong', passed ? 'diagnosis-success' : 'diagnosis-warning', title));
+  const steps = element('ul', 'diagnosis-steps');
+  const add = (label, status, detail) => {
+    const row = element('li', `diagnosis-${status}`);
+    row.append(element('span', 'diagnosis-label', label), element('span', '', detail));
+    steps.append(row);
+  };
+  add('代理协议 / 认证', result.ok ? 'success' : 'error', result.ok
+    ? `${String(result.configuredProtocol || '').toUpperCase()} 连接通过`
+    : error?.message || '代理连接未通过，后续检查未执行。');
+  const probe = result.probe;
+  add('实际出口', probe?.ip ? 'success' : 'pending', probe?.ip ? `${probe.ip} · ${countryLabel(probe.country)}` : '尚未取得出口信息');
+  add('目标国家', result.targetCountryMatches === true ? 'success' : result.targetCountryMatches === false ? 'error' : 'pending', result.targetCountryMatches === true
+    ? `与${countryName(input.country)}一致` : result.targetCountryMatches === false ? `与目标${countryName(input.country)}不一致` : '等待出口检查');
+  add('Google 登录页', result.googleReachable === true ? 'success' : result.googleReachable === false ? 'error' : 'pending', result.googleReachable === true
+    ? 'HTTPS 请求通过；登录由你在独立浏览器中完成' : result.googleReachable === false ? result.googleError || 'Google 登录页未连通' : '尚未检查');
+  panel.append(steps);
+  if (error?.code === 'proxy_auth_required') {
+    panel.append(element('p', 'diagnosis-warning', '请在上方填写代理商提供的用户名和密码，再点“重新诊断”。如果服务商使用 IP 白名单，请先完成该授权。'));
+    if (!$('#proxy-username').disabled) panel.append(actionButton('填写代理认证', 'button button-small button-outline', () => $('#proxy-username').focus()));
+  }
+  if (result.alternateProtocol?.ok === true && ['http', 'socks5'].includes(result.suggestedProtocol)
+    && result.alternateProtocol.protocol === result.suggestedProtocol && !$('#profile-proxy').disabled) {
+    const suggestion = element('p', '', `同一端口使用 ${result.suggestedProtocol.toUpperCase()} 已成功取得出口，原填写协议可能不匹配。`);
+    panel.append(suggestion, actionButton(`改用 ${result.suggestedProtocol.toUpperCase()} 并重新诊断`, 'button button-small button-outline', () => {
+      try {
+        const url = new URL(input.proxy);
+        $('#profile-proxy').value = `${result.suggestedProtocol}://${url.host}`;
+        resetProxyDiagnosis();
+        diagnoseProxy();
+      } catch { toast('无法调整此地址，请在代理栏手动修改协议。', 'error'); }
+    }));
+  }
+  panel.append(element('p', 'field-help', passed ? '可以保存环境，再点击卡片中的“登录 Google 账号”。启动前还会复查出口。' : '本次仅诊断网络，未保存配置或启动浏览器。'));
+}
+
+async function diagnoseProxy() {
+  const proxy = $('#profile-proxy').value.trim();
+  if (!proxy) { $('#profile-proxy').focus(); toast('先填写代理地址，再诊断连接。', 'error'); return; }
+  const profile = state.profiles.find((item) => item.id === editingProfileId);
+  const input = { proxy, country: $('#profile-country').value.trim().toUpperCase(),
+    proxyUsername: $('#proxy-username').value.trim(), proxyPassword: $('#proxy-password').value,
+    clearProxyAuth: $('#clear-proxy-auth').checked };
+  if (profile && profile.proxy === proxy) input.profileId = profile.id;
+  const sequence = ++diagnosisSequence;
+  const button = $('#diagnose-proxy');
+  button.disabled = true;
+  button.textContent = '正在诊断…';
+  const panel = $('#proxy-diagnosis');
+  panel.hidden = false;
+  panel.replaceChildren(element('p', '', '正在检查代理协议、认证、出口国家和 Google 登录页。必要时会验证另一种协议；最多等待 100 秒。'));
+  try {
+    const result = await api('/api/proxy/diagnose', { method: 'POST', body: JSON.stringify(input) });
+    if (sequence === diagnosisSequence) renderProxyDiagnosis(result, input);
+  } catch (error) {
+    if (sequence === diagnosisSequence) panel.replaceChildren(element('p', 'diagnosis-error', error.message));
+  } finally {
+    if (sequence === diagnosisSequence) { button.disabled = false; button.textContent = '重新诊断'; }
+  }
+}
+
 function renderCatalog(data) {
+  catalogData = data;
   const direct = data.sourceKind === 'free';
   const results = $('#catalog-results');
-  const nodes = Array.isArray(data.nodes) ? data.nodes : [];
-  const total = Number.isFinite(data.total) ? data.total : nodes.length;
+  const allNodes = Array.isArray(data.nodes) ? [...data.nodes] : [];
+  if (direct) {
+    const merged = new Map(allNodes.map((node) => [proxyCheckKey(node), node]));
+    for (const node of [...(scanState.results || []), ...(scanState.verifiedNodes || [])]) {
+      if (data.country === 'ALL' || data.country === node.country) merged.set(proxyCheckKey(node), node);
+    }
+    allNodes.splice(0, allNodes.length, ...merged.values());
+    for (const node of allNodes) rememberProxyVerification(node);
+  }
+  const verified = allNodes.filter((node) => usableProxyResult(proxyChecks.get(proxyCheckKey(node))));
+  const nodes = direct && !$('#show-candidates').checked ? verified : allNodes;
+  const total = Number.isFinite(data.total) ? data.total : allNodes.length;
   const isAll = data.country === 'ALL';
   const scope = isAll ? direct ? '全部支持国家（美日韩）' : '全部国家' : countryName(data.country);
-  $('#catalog-status').textContent = `${scope}展示 ${nodes.length} 个${direct ? '候选' : '节点'} · ${direct ? '美日韩共' : '来源共'} ${total} 个 · ${data.cached ? '缓存' : '已获取'} ${timeLabel(data.fetchedAt)} · 来源 ${data.source || (direct ? '公开代理目录' : 'VPN Gate')}`;
+  $('#catalog-status').textContent = direct
+    ? `${scope} · 当前有效 ${verified.length} 个 · 展示 ${nodes.length} 个${$('#show-candidates').checked ? '候选' : '已通过节点'} · 目录共 ${total} 个候选`
+    : `${scope}展示 ${nodes.length} 个节点 · 来源共 ${total} 个 · ${data.cached ? '缓存' : '已获取'} ${timeLabel(data.fetchedAt)} · 来源 ${data.source || 'VPN Gate'}`;
   const failedSources = (Array.isArray(data.sources) ? data.sources : []).filter((source) => source.ok === false || source.status === 'failed');
   $('#catalog-source-status').hidden = !failedSources.length;
   $('#catalog-source-status').textContent = failedSources.length ? `部分来源读取失败：${failedSources.map((source) => source.name || '未命名来源').join('、')}。当前展示其余来源的结果，数量可能不完整。` : '';
@@ -453,15 +561,25 @@ function renderCatalog(data) {
   summary.append(element('span', '', '国家供给：'));
   for (const code of countries.slice(0, 12)) {
     const count = Number(counts[code]) || 0;
-    summary.append(actionButton(`${countryName(code)} ${count}`, `catalog-count ${data.country === code ? 'selected' : ''}`, () => selectCatalogCountry(code)));
+    summary.append(actionButton(`${countryName(code)} ${count}${direct ? ' 候选' : ''}`, `catalog-count ${data.country === code ? 'selected' : ''}`, () => selectCatalogCountry(code)));
   }
   $('#catalog-summary').replaceChildren(summary);
   if (!nodes.length) {
     const empty = element('div', 'catalog-empty');
-    empty.append(element('strong', '', isAll ? '当前目录没有可展示的节点' : `${countryName(data.country)}当前没有节点`));
-    empty.append(element('p', '', isAll ? `当前${direct ? '美日韩范围' : '来源目录'}返回了 0 个节点。请稍后重试，或更换目录来源。` : `已成功读取${direct ? '美日韩' : '来源目录'} ${total} 个节点，但没有符合此国家的节点。可查看${direct ? '全部支持国家' : '全部国家'}。`));
-    if (!isAll) empty.append(actionButton(`查看${direct ? '美日韩' : '全球'} ${total} 个节点`, 'button button-outline', () => selectCatalogCountry('ALL')));
+    const allSourcesFailed = data.sources?.length > 0 && failedSources.length === data.sources.length;
+    if (allSourcesFailed) {
+      empty.append(element('strong', '', '来源读取失败，无法判断节点供给'), element('p', '', '请重试目录请求。读取失败不代表这个国家没有节点。'));
+    } else if (direct && !$('#show-candidates').checked) {
+      empty.append(element('strong', '', scanState.running ? '正在筛选，尚无近期通过的节点' : '当前没有近期检测通过的节点'));
+      empty.append(element('p', '', allNodes.length ? `已加载 ${allNodes.length} 个候选。未检测、失败及超过 2 分钟的结果不会显示为可用；点击“自动筛选可用节点”继续检查下一批。` : '当前范围没有候选可检。可以切换国家、刷新目录，或配置你已有的代理。'));
+      if (allNodes.length) empty.append(actionButton('查看候选与失败原因', 'button button-outline', () => { $('#show-candidates').checked = true; renderCatalog(catalogData); }));
+    } else {
+      empty.append(element('strong', '', isAll ? '当前目录没有可展示的节点' : `${countryName(data.country)}当前没有节点`));
+      empty.append(element('p', '', isAll ? `当前${direct ? '美日韩范围' : '来源目录'}返回了 0 个节点。请稍后重试，或更换目录来源。` : `已读取来源目录 ${total} 个节点，但没有符合此国家的节点。可查看全部国家。`));
+    }
+    if (!isAll) empty.append(actionButton('查看全部支持国家', 'button button-outline', () => selectCatalogCountry('ALL')));
     results.replaceChildren(empty);
+    updateScanControls();
     return;
   }
   const table = element('table', 'catalog-table');
@@ -497,11 +615,12 @@ function renderCatalog(data) {
   const scroll = element('div', 'table-scroll');
   scroll.append(table);
   results.replaceChildren(scroll);
+  updateScanControls();
 }
 
 function proxyCheckKey(node) { return `${node.id}:${node.country}`; }
 
-function renderProxyRow(node) {
+function rememberProxyVerification(node) {
   const key = proxyCheckKey(node);
   if (node.verification && typeof node.verification === 'object' && !pendingProxyChecks.has(key)) {
     const previous = proxyChecks.get(key);
@@ -509,6 +628,11 @@ function renderProxyRow(node) {
       proxyChecks.set(key, { ...node.verification, fromCatalog: true });
     }
   }
+}
+
+function renderProxyRow(node) {
+  const key = proxyCheckKey(node);
+  rememberProxyVerification(node);
   const row = element('tr');
   const address = element('td');
   address.append(element('strong', 'proxy-address', node.proxy || node.hostname || node.ip || '地址未提供'));
@@ -575,7 +699,8 @@ async function checkPublicProxy(node) {
     proxyChecks.set(key, { ok: false, error: error.message });
   } finally {
     pendingProxyChecks.delete(key);
-    updateProxyRow(node);
+    if (catalogData) renderCatalog(catalogData);
+    else updateProxyRow(node);
   }
 }
 
@@ -588,6 +713,8 @@ function importPublicProxy(node) {
 
 function updateCatalogSource() {
   const direct = $('#catalog-source').value === 'free';
+  $('#scan-proxies').hidden = !direct;
+  $('#candidate-filter').hidden = !direct;
   const countries = $('#catalog-country');
   for (const option of countries.options) {
     option.disabled = direct && option.value !== 'ALL' && !directProxyCountries.includes(option.value);
@@ -596,7 +723,7 @@ function updateCatalogSource() {
   }
   if (direct && countries.value !== 'ALL' && !directProxyCountries.includes(countries.value)) countries.value = 'ALL';
   $('#catalog-note').textContent = direct
-    ? '目前查询美国、日本、韩国。先检测节点，通过后点击“用此代理创建环境”，保存并登录 Google。每国最多展示 100 个候选，同时最多检测 3 个。公共节点可能失效；ASN 和目录国家都不是住宅属性证明。'
+    ? '每次自动检查最多 30 个候选，同时检测 3 个；再次筛选会继续下一批。默认只显示最近 2 分钟内出口国家与 Google 连通性均通过的节点。公开代理没有可用率保证，住宅属性未验证。'
     : '此目录列出 VPN / OpenVPN 服务。需要通过 VPN 客户端或 fanout 转为本地 HTTP / SOCKS5 后才能配置环境；节点 IP 不能直接用作代理地址。住宅属性未验证。';
   const links = direct ? [
     ['monosans / proxy-list · 来源 ↗', 'https://github.com/monosans/proxy-list'],
@@ -610,6 +737,93 @@ function updateCatalogSource() {
     link.href = url; link.target = '_blank'; link.rel = 'noopener noreferrer';
     return link;
   }));
+  updateScanControls();
+}
+
+function scanIsActive() {
+  return Boolean(scanState.running || scanState.active > 0 || ['loading', 'running'].includes(scanState.state));
+}
+
+function updateScanControls() {
+  const active = scanIsActive();
+  $('#scan-proxies').disabled = scanRequestPending || active || loadingCatalog;
+  $('#scan-proxies').textContent = active ? '正在筛选…' : '自动筛选可用节点';
+  $('#catalog-country').disabled = active || loadingCatalog;
+  $('#catalog-source').disabled = active || loadingCatalog;
+  document.querySelectorAll('.catalog-count').forEach((button) => { button.disabled = active || loadingCatalog; });
+  $('#cancel-scan').disabled = scanRequestPending || !active || scanState.state === 'cancelled';
+  $('#cancel-scan').hidden = !active;
+}
+
+function renderScanStatus() {
+  const panel = $('#scan-progress');
+  panel.hidden = scanState.state === 'idle';
+  if (panel.hidden) { updateScanControls(); return; }
+  const total = Number(scanState.total) || 0;
+  const tested = Number(scanState.tested ?? scanState.completed) || 0;
+  const active = Number(scanState.active) || 0;
+  const labels = { loading: '正在读取候选目录', running: '正在筛选可用节点', completed: '本批筛选完成', cancelled: active ? '已停止排队，等待当前检测结束' : '筛选已停止', failed: '筛选未能完成' };
+  $('#scan-progress-title').textContent = `${scanState.country && scanState.country !== 'ALL' ? countryName(scanState.country) : '美日韩'} · ${labels[scanState.state] || '筛选状态'}`;
+  const progress = $('#scan-progress-bar');
+  progress.max = Math.max(1, total);
+  if (scanState.state === 'loading') progress.removeAttribute('value');
+  else progress.value = tested;
+  const detail = `已检测 ${tested} / ${total} · 通过 ${Number(scanState.passed) || 0} · 失败 ${Number(scanState.failed) || 0}${active ? ` · 正在检测 ${active}` : ''}`;
+  const suffix = scanState.error ? `。${scanState.error}` : scanState.exhausted ? '。当前候选均已检查；请等待结果过期后再试，或切换国家。' : scanState.state === 'completed' && !scanState.passed ? '。本批没有通过的节点，可继续筛选下一批；展开全部候选可查看失败原因。' : '';
+  $('#scan-progress-detail').textContent = detail + suffix;
+  updateScanControls();
+}
+
+function acceptScanState(result) {
+  scanState = result.scan || result;
+  renderScanStatus();
+  if (catalogData?.sourceKind === 'free') renderCatalog(catalogData);
+  else if (!catalogData && scanState.id && !loadingCatalog && $('#catalog-source').value === 'free') loadCatalog();
+  window.clearTimeout(scanPollTimer);
+  if (scanIsActive()) scanPollTimer = window.setTimeout(() => pollScanStatus(), 1500);
+}
+
+async function pollScanStatus() {
+  try {
+    const result = await api('/api/proxies/scan');
+    acceptScanState(result);
+  } catch (error) {
+    $('#scan-progress').hidden = false;
+    $('#scan-progress-detail').textContent = `暂时无法读取筛选进度：${error.message} 进度恢复后会继续显示结果。`;
+    if (scanIsActive()) scanPollTimer = window.setTimeout(() => pollScanStatus(), 4000);
+  }
+}
+
+async function startProxyScan() {
+  if (scanRequestPending || scanIsActive()) return;
+  scanRequestPending = true;
+  updateScanControls();
+  $('#catalog-error').hidden = true;
+  try {
+    const result = await api('/api/proxies/scan', { method: 'POST', body: JSON.stringify({ country: $('#catalog-country').value, limit: 30 }) });
+    acceptScanState(result);
+    if (!catalogData || catalogData.sourceKind !== 'free' || catalogData.country !== $('#catalog-country').value) await loadCatalog();
+  } catch (error) {
+    $('#catalog-error').textContent = `无法开始筛选：${error.message}`;
+    $('#catalog-error').hidden = false;
+  } finally {
+    scanRequestPending = false;
+    updateScanControls();
+  }
+}
+
+async function cancelProxyScan() {
+  if (scanRequestPending || !scanIsActive()) return;
+  scanRequestPending = true;
+  updateScanControls();
+  try {
+    acceptScanState(await api('/api/proxies/scan/cancel', { method: 'POST', body: '{}' }));
+  } catch (error) {
+    $('#scan-progress-detail').textContent = `停止请求未完成：${error.message}`;
+  } finally {
+    scanRequestPending = false;
+    updateScanControls();
+  }
 }
 
 function safeCatalogLink(value) {
@@ -621,7 +835,7 @@ function safeCatalogLink(value) {
 }
 
 function selectCatalogCountry(country) {
-  if (loadingCatalog) return;
+  if (loadingCatalog || scanIsActive()) return;
   const select = $('#catalog-country');
   if (![...select.options].some((option) => option.value === country)) {
     const option = element('option', '', countryLabel(country));
@@ -636,6 +850,7 @@ async function loadCatalog() {
   if (loadingCatalog) return;
   updateCatalogSource();
   loadingCatalog = true;
+  updateScanControls();
   const button = $('#load-catalog');
   const selectedCountry = $('#catalog-country').value;
   const selectedSource = $('#catalog-source').value;
@@ -657,10 +872,8 @@ async function loadCatalog() {
   } finally {
     loadingCatalog = false;
     button.disabled = false;
-    button.textContent = '加载公共节点';
-    $('#catalog-country').disabled = false;
-    $('#catalog-source').disabled = false;
-    document.querySelectorAll('.catalog-count').forEach((item) => { item.disabled = false; });
+    button.textContent = '刷新目录';
+    updateScanControls();
   }
 }
 
@@ -710,12 +923,24 @@ function updateCountryDefaults() {
 }
 $('#profile-country').addEventListener('input', updateCountryDefaults);
 $('#profile-country').addEventListener('change', updateCountryDefaults);
+for (const id of ['profile-proxy', 'profile-country', 'proxy-username', 'proxy-password']) document.getElementById(id).addEventListener('input', resetProxyDiagnosis);
+$('#diagnose-proxy').addEventListener('click', diagnoseProxy);
+$('#clear-proxy-auth').addEventListener('change', () => {
+  const disabled = $('#clear-proxy-auth').checked || profileLocked(state.profiles.find((item) => item.id === editingProfileId));
+  $('#proxy-username').disabled = disabled;
+  $('#proxy-password').disabled = disabled;
+  resetProxyDiagnosis();
+});
 for (const id of ['environment-locale', 'environment-timezone']) {
   document.getElementById(id).addEventListener('input', () => editedEnvironmentFields.add(id));
 }
 $('#load-catalog').addEventListener('click', loadCatalog);
+$('#scan-proxies').addEventListener('click', startProxyScan);
+$('#cancel-scan').addEventListener('click', cancelProxyScan);
+$('#show-candidates').addEventListener('change', () => { if (catalogData) renderCatalog(catalogData); });
 $('#catalog-country').addEventListener('change', loadCatalog);
 $('#catalog-source').addEventListener('change', () => {
+  catalogData = null;
   updateCatalogSource();
   $('#catalog-summary').replaceChildren();
   $('#catalog-results').replaceChildren(element('div', 'catalog-empty', '正在读取所选来源…'));
@@ -726,7 +951,7 @@ $('#find-public-proxy').addEventListener('click', () => {
   $('#catalog').scrollIntoView({ block: 'start', behavior: 'smooth' });
   if (!loadingCatalog) { $('#catalog-source').value = 'free'; updateCatalogSource(); loadCatalog(); }
 });
-$('#configure-fanout').addEventListener('click', () => openProfileDialog(null, { country: $('#catalog-country').value === 'ALL' ? 'US' : $('#catalog-country').value, fanout: true }));
+$('#configure-fanout').addEventListener('click', () => openProfileDialog(null, { country: $('#catalog-country').value === 'ALL' ? 'US' : $('#catalog-country').value, fanout: true, focusProxy: true }));
 $('#open-devices').addEventListener('click', (event) => {
   const profile = state.profiles.find((item) => item.id === reviewingProfileId);
   if (profile) launchTarget(profile, 'devices', event.currentTarget);
@@ -785,6 +1010,7 @@ $('#observation-form').addEventListener('submit', (event) => saveForm({
 
 updateCatalogSource();
 window.setInterval(() => {
-  for (const { node } of proxyRows.values()) updateProxyRow(node);
+  if (catalogData?.sourceKind === 'free') renderCatalog(catalogData);
+  else for (const { node } of proxyRows.values()) updateProxyRow(node);
 }, 15000);
-loadState().catch(() => {});
+loadState().then(() => pollScanStatus()).catch(() => {});

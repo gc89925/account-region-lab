@@ -45,3 +45,75 @@ test('a probe from an expired directory cannot mark the refreshed directory as v
   clock=120001;country='JP';await catalog.list('JP');release();await checking;
   assert.equal((await catalog.list('JP')).nodes[0].verification,null);
 });
+
+const tick=()=>new Promise(resolve=>setImmediate(resolve));
+async function finishScan(catalog) {
+  for(let i=0;i<1000&&catalog.scanStatus().running;i++) await tick();
+  assert.equal(catalog.scanStatus().running,false,'scan should finish');
+  return catalog.scanStatus();
+}
+
+test('batch scan checks country and Google with a shared concurrency limit and country rotation',async()=>{
+  const rows=['US','JP','KR'].flatMap((country,c)=>Array.from({length:3},(_,i)=>item(`8.8.${c+1}.${i+1}`,country)));
+  const hosts=new Map(rows.map(row=>[row.host,row.geolocation.country.iso_code]));
+  let active=0,maxActive=0;const releases=[],started=[];
+  const catalog=createPublicProxyCatalog({supplemental:false,fetchImpl:async()=>new Response(JSON.stringify(rows)),
+    probe:async proxy=>{const ip=new URL(proxy).hostname;active++;maxActive=Math.max(active,maxActive);started.push(ip);await new Promise(resolve=>releases.push(resolve));active--;return {ip,country:hosts.get(ip)};},
+    google:async proxy=>new URL(proxy).hostname!=='8.8.2.1'});
+  const first=await catalog.startScan('ALL',{limit:6});
+  assert.equal(first.total,6);assert.equal(first.active,3);assert.deepEqual(started.map(ip=>hosts.get(ip)),['US','JP','KR']);
+  await assert.rejects(catalog.startScan('US'),/正在检测/);
+  const unstarted=(await catalog.list('US')).nodes.find(node=>!started.includes(node.ip));
+  await assert.rejects(catalog.check(unstarted.id,'US'),/3 个节点/);
+  releases.splice(0).forEach(resolve=>resolve());await tick();
+  assert.equal(catalog.scanStatus().completed,3);assert.equal(catalog.scanStatus().active,3);
+  releases.splice(0).forEach(resolve=>resolve());const done=await finishScan(catalog);
+  assert.equal(maxActive,3);assert.equal(done.total,6);assert.equal(done.completed,6);
+  assert.equal(done.passed,5);assert.equal(done.failed,1);assert.equal(done.verifiedNodes.length,5);
+  assert.ok(done.verifiedNodes.every(node=>node.verification.usable&&node.verification.googleReachable));
+});
+
+test('cancelling a scan stops queued probes while keeping in-flight outcomes visible',async()=>{
+  const rows=Array.from({length:10},(_,i)=>item(`8.8.1.${i+1}`));const releases=[];let started=0;
+  const catalog=createPublicProxyCatalog({supplemental:false,fetchImpl:async()=>new Response(JSON.stringify(rows)),
+    probe:async proxy=>{started++;await new Promise(resolve=>releases.push(resolve));return {ip:new URL(proxy).hostname,country:'US'};},google:async()=>true});
+  await catalog.startScan('US',{limit:10});const cancelled=catalog.cancelScan();
+  assert.equal(cancelled.state,'cancelled');assert.equal(cancelled.queued,0);assert.equal(cancelled.active,3);
+  releases.splice(0).forEach(resolve=>resolve());await tick();
+  assert.equal(started,3);assert.equal(catalog.scanStatus().state,'cancelled');assert.equal(catalog.scanStatus().active,0);
+  assert.equal(catalog.scanStatus().completed,3);assert.equal(catalog.scanStatus().verifiedNodes.length,3);
+});
+
+test('repeat scans advance beyond failed candidates, bound the batch, and explicitly report exhaustion',async()=>{
+  const rows=Array.from({length:35},(_,i)=>item(`8.8.1.${i+1}`));const started=[];
+  const catalog=createPublicProxyCatalog({supplemental:false,fetchImpl:async()=>new Response(JSON.stringify(rows)),
+    probe:async proxy=>{started.push(proxy);throw new Error('unreachable');},google:async()=>true});
+  await assert.rejects(catalog.startScan('US',{limit:31}),/1 至 30/);
+  assert.equal((await catalog.startScan('US')).total,30);let done=await finishScan(catalog);
+  assert.equal(done.remaining,5);assert.equal(done.failed,30);assert.equal(done.verifiedNodes.length,0);
+  assert.equal((await catalog.startScan('US')).total,5);done=await finishScan(catalog);
+  assert.equal(done.failed,5);assert.equal(new Set(started).size,35);
+  done=await catalog.startScan('US');assert.equal(done.state,'completed');assert.equal(done.total,0);assert.equal(done.exhausted,true);
+});
+
+test('verified results expire explicitly and cannot remain in the usable-node view',async()=>{
+  let clock=0;
+  const catalog=createPublicProxyCatalog({supplemental:false,now:()=>clock,fetchImpl:async()=>new Response(JSON.stringify([item()])),
+    probe:async()=>({ip:'8.8.8.8',country:'US'}),google:async()=>true});
+  await catalog.startScan('US');let done=await finishScan(catalog);
+  assert.equal(done.verifiedNodes.length,1);assert.equal(done.results[0].verification.expiresAt,new Date(120000).toISOString());
+  clock=120000;done=catalog.scanStatus();
+  assert.equal(done.results[0].verification.ok,true);assert.equal(done.results[0].verification.fresh,false);
+  assert.equal(done.results[0].verification.usable,false);assert.equal(done.verifiedNodes.length,0);
+  const list=await catalog.list('US');assert.equal(list.nodes[0].verification.fresh,false);assert.equal(list.nodes[0].verification.usable,false);
+});
+
+test('a scan cancelled while its catalog loads never launches a probe',async()=>{
+  let release,started=0;
+  const wait=new Promise(resolve=>{release=resolve;});
+  const catalog=createPublicProxyCatalog({supplemental:false,fetchImpl:async()=>{await wait;return new Response(JSON.stringify([item()]));},
+    probe:async()=>{started++;return {ip:'8.8.8.8',country:'US'};},google:async()=>true});
+  const pending=catalog.startScan('US');assert.equal(catalog.scanStatus().state,'loading');
+  catalog.cancelScan();release();await pending;
+  assert.equal(catalog.scanStatus().state,'cancelled');assert.equal(started,0);
+});

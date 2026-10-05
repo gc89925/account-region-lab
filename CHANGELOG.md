@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.0 — 2026-10-06
+
+- SOCKS5 username/password fields with Windows current-user DPAPI storage and a loopback authentication bridge for native and managed browsers.
+- Precise sanitized proxy diagnostics, explicit tested protocol suggestions, and bounded fallback between HTTPS geolocation providers.
+- Bounded automatic public-proxy batches with progress, cancellation, rotating candidates and a default recently verified results view.
+
 ## 0.2.2 — 2026-10-06
 
 - Background launcher, explicit Stop/Status commands, persistent service logs, and a shared local data-directory configuration.
