@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1 — 2026-10-05
+
+- Explicit Google sign-in action, missing-proxy setup guidance, persistent action feedback, and visible device-dialog errors.
+- Global public-node list with country counts and popular-country filters, distinguishing empty results from source failures.
+- Automatic browser opening from the launcher; early native-browser exits and proxy errors now have actionable messages.
+- Failed managed navigations retain their page for inspection; copied environments use fresh browser storage.
+
 ## 0.2.0 — 2026-10-05
 
 - Official Google device-management assistant and user-confirmed review records.

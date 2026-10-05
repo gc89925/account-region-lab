@@ -52,7 +52,7 @@ test('failed navigation is not a successful login and retains the reusable conte
   const { launcher, options, contexts, behavior } = await fixture(t, { navigationError: true });
   const result = await launcher.open(options);
   assert.equal(result.ok, false); assert.equal(result.code, 'NAVIGATION_FAILED'); assert.equal(result.active, true);
-  assert.equal(contexts[0].pages[0].closed, true); assert.equal(launcher.isActive(ID), true);
+  assert.equal(contexts[0].pages[0].closed, false); assert.equal(launcher.isActive(ID), true);
   assert.ok(!JSON.stringify(result).includes('credential'));
   behavior.navigationError = false;
   assert.deepEqual(await launcher.open({ ...options, url: DIAGNOSTICS_URL + '#' + encodeURIComponent(JSON.stringify({ engine: 'managed' })) }), { ok: true });

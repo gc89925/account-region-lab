@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { acquireLock, curlArgs } from '../lib/runtime.js';
+import { acquireLock, curlArgs, launchBrowser, probeErrorMessage } from '../lib/runtime.js';
 
 test('proxy probe disables curl configuration and environment bypasses and resolves SOCKS DNS through the proxy', () => {
   for (const proxy of ['http://127.0.0.1:18080', 'socks5://127.0.0.1:1080']) {
@@ -28,4 +28,17 @@ test('a data directory has one active writer and can be reopened after its lock 
   try { assert.throws(() => acquireLock(dataDir)); } finally { release(); }
   const releaseAgain = acquireLock(dataDir);
   releaseAgain();
+});
+
+test('native launcher surfaces process failures instead of reporting a successful spawn', async () => {
+  await assert.rejects(launchBrowser(process.execPath, ['-e', 'process.exit(7)']), /立即退出/);
+  await assert.rejects(launchBrowser('missing-arl-browser-executable', []), /无法启动/);
+  assert.ok((await launchBrowser(process.execPath, ['-e', 'process.exit(0)'])).pid);
+});
+
+test('proxy failures give actionable errors without exposing raw subprocess output', () => {
+  assert.match(probeErrorMessage({code:7}), /启动代理软件/);
+  assert.match(probeErrorMessage({code:28}), /超时/);
+  assert.match(probeErrorMessage({code:'ENOENT'}), /curl/);
+  assert.ok(!probeErrorMessage({code:99,stderr:'private proxy information'}).includes('private'));
 });

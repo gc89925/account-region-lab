@@ -39,7 +39,7 @@ test('profile input validates names and country codes and never imports caller I
 
 test('browser arguments require a proxy and only navigate to an allowed official destination', () => {
   const profile = makeProfile({ label: 'India', country: 'IN', proxy: 'socks5://127.0.0.1:1080' });
-  for (const target of ['gmail', 'youtube', 'terms', 'appeal']) {
+  for (const target of ['signin', 'gmail', 'youtube', 'terms', 'appeal']) {
     const args = buildBrowserArgs(profile, 'C:/temporary test/profile-1', target);
     assert.equal(args.at(-1), LINKS[target]);
     assert.ok(args.includes('--user-data-dir=C:/temporary test/profile-1'));

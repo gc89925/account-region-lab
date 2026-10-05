@@ -261,3 +261,18 @@ test('browser process failures do not create successful launch records or start 
   assert.equal(saved.cycleStartedAt, null);
   assert.equal(saved.checks.at(-1).ok, true);
 });
+
+test('explicit Google sign-in uses the isolated profile and still requires a matching proxy', async t => {
+  let country = 'CN';
+  const app = await fixture(t, {probe: async () => ({ip:'203.0.113.10', country})});
+  const profile = await app.create('Google sign-in');
+  const endpoint = `/api/profiles/${profile.id}/launch`;
+  assert.equal((await app.request(endpoint,{method:'POST',body:{target:'signin'}})).status,400);
+  assert.equal(app.launches.length,0);
+  country = 'IN';
+  const result = await app.request(endpoint,{method:'POST',body:{target:'signin'}});
+  assert.equal(result.status,200,result.raw);
+  assert.equal(app.launches[0].args.at(-1),'https://accounts.google.com/');
+  assert.match(result.value.message,/独立浏览器窗口/);
+  assert.match(result.value.message,/尚未确认登录状态/);
+});

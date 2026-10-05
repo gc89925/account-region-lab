@@ -82,6 +82,8 @@ test('catalog validates country and does not accept client-supplied source URLs'
   const app=await fixture(t,{catalog:{list:async country=>{called.push(country);return {total:0,country,nodes:[]};}}});
   const result=await app.request('/api/catalog?country=NG&url=http://127.0.0.1:9');
   assert.equal(result.status,200); assert.deepEqual(called,['NG']); assert.deepEqual(result.data.nodes,[]);
+  assert.equal((await app.request('/api/catalog')).data.country,'ALL');
+  assert.equal((await app.request('/api/catalog?country=all')).data.country,'ALL');
   assert.equal((await app.request('/api/catalog?country=XX')).status,400);
 });
 
@@ -102,4 +104,12 @@ test('a managed close failure must not be reported as a closed browser',async t=
   const response=await app.request(`/api/profiles/${p.id}/close`,{});
   assert.equal(response.status,400);
   assert.match(response.data.error,/未能关闭/);
+});
+
+test('public proxy checking only forwards node identity behind the local write token',async t=>{
+  const calls=[];
+  const app=await fixture(t,{publicProxies:{list:async country=>({country,nodes:[]}),check:async(id,country)=>{calls.push({id,country});return {ok:false,error:'test failure'};}}});
+  assert.equal((await app.request('/api/proxies?country=JP')).data.country,'JP');
+  const result=await app.request('/api/proxies/check',{id:'abc',country:'JP',proxy:'http://127.0.0.1:9'});
+  assert.equal(result.status,200);assert.deepEqual(calls,[{id:'abc',country:'JP'}]);
 });

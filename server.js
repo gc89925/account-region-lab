@@ -8,9 +8,10 @@ import { LINKS, countryCode, makeProfile, profileInput, withStats, buildBrowserA
 import { defaultDataDir, detectBrowser, probeProxy, launchBrowser, atomicSave, acquireLock } from './lib/runtime.js';
 import { createManagedLauncher } from './lib/managed.js';
 import { createCatalog } from './lib/catalog.js';
+import { createPublicProxyCatalog } from './lib/public-proxies.js';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
-const VERSION = '0.2.0';
+const VERSION = '0.2.1';
 
 function respond(res, status, data) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -33,7 +34,7 @@ async function readBody(req) {
   } catch { throw new Error('请求 JSON 无效。'); }
 }
 
-export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || defaultDataDir(), probe = probeProxy, launch = launchBrowser, browser = detectBrowser(), managed = createManagedLauncher(), catalog = createCatalog() } = {}) {
+export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || defaultDataDir(), probe = probeProxy, launch = launchBrowser, browser = detectBrowser(), managed = createManagedLauncher(), catalog = createCatalog(), publicProxies = createPublicProxyCatalog() } = {}) {
   dataDir = resolve(dataDir);
   const release = acquireLock(dataDir);
   const file = join(dataDir, 'state.json');
@@ -99,7 +100,11 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
       const url = new URL(req.url, `http://${req.headers.host}`);
       if (req.method === 'GET' && url.pathname === '/api/health') return respond(res, 200, { app: 'account-region-lab', version: VERSION, ready: true });
       if (req.method === 'GET' && url.pathname === '/api/state') return respond(res, 200, snapshot());
-      if (req.method === 'GET' && url.pathname === '/api/catalog') return respond(res, 200, await catalog.list(countryCode(url.searchParams.get('country') || 'IN')));
+      if (req.method === 'GET' && url.pathname === '/api/proxies') return respond(res,200,await publicProxies.list((url.searchParams.get('country') || 'ALL').toUpperCase()));
+      if (req.method === 'GET' && url.pathname === '/api/catalog') {
+        const requested = (url.searchParams.get('country') || 'ALL').toUpperCase();
+        return respond(res, 200, await catalog.list(requested === 'ALL' ? 'ALL' : countryCode(requested)));
+      }
       if (req.method === 'GET' && url.pathname === '/api/export') {
         const profiles = state.profiles.map(({ proxy, expectedIp, accountLabel, checks, ...p }) => ({ ...p, proxyConfigured: !!proxy, checks: checks.map(({ ip, ...c }) => c) }));
         res.setHeader('Content-Disposition', 'attachment; filename="account-region-observations.json"');
@@ -108,6 +113,7 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
       if (['POST', 'PATCH'].includes(req.method)) {
         if (req.headers['x-lab-token'] !== token) return respond(res, 403, { error: '会话令牌无效，请刷新本地页面。' });
         const body = await readBody(req);
+        if (req.method === 'POST' && url.pathname === '/api/proxies/check') return respond(res,200,await publicProxies.check(body.id,body.country));
         if (req.method === 'POST' && url.pathname === '/api/profiles') {
           if (state.profiles.length >= 100) throw new Error('第一版最多支持 100 个环境。');
           const p = makeProfile(body);
@@ -160,7 +166,7 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
             opening = await managed.open({ profile, profileDir, browserPath: browser.path, url: destination });
           } else {
             const args = buildBrowserArgs(profile, profileDir, body.target);
-            await launch(browser.path, args);
+            opening = await launch(browser.path, args);
           }
           if (opening?.ok === false && !opening.active) throw new Error('受控环境打开失败，请检查浏览器和代理设置。');
           const at = new Date().toISOString();
@@ -172,7 +178,7 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
           profile.launches = profile.launches.slice(-500);
           save();
           if (opening?.ok === false) throw new Error('浏览器已启动，但目标页面未加载成功。环境设置已固定；可关闭受控环境后检查线路重试。');
-          return respond(res, 200, { ok: true, message: '已发送浏览器启动请求。请在浏览器内确认出口和登录账号；本次检测不代表 Google 的地区判定。', profile: withStats(profile) });
+          return respond(res, 200, { ok: true, message: `已向本机 ${browser.name} 打开此环境。请切换到弹出的独立浏览器窗口完成 Google 登录；登录表单不在工作台内。本工具尚未确认登录状态。`, profile: withStats(profile) });
         }
         if (match[2] === 'device-review') {
           if (typeof body.otherSessionsSignedOut !== 'boolean' || typeof body.currentSessionKept !== 'boolean') throw new Error('请明确填写设备核查结果。');
