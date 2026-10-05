@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.1 — 2026-10-06
+
+- Pasting an authenticated SOCKS5 URI splits its address, decoded username and password into separate settings fields without displaying credentials in feedback.
+- Settings, observation and device-review dialogs remain open when their backdrop is clicked, preserving in-progress inputs.
+
 ## 0.3.0 — 2026-10-06
 
 - SOCKS5 username/password fields with Windows current-user DPAPI storage and a loopback authentication bridge for native and managed browsers.

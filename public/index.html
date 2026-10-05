@@ -7,7 +7,7 @@
     <meta name="theme-color" content="#1e493e">
     <title>账号地区实验室 · Account Region Lab</title>
     <link rel="stylesheet" href="/style.css">
-    <script src="/app.js" defer></script>
+    <script src="/app.js" type="module"></script>
   </head>
   <body>
     <a class="skip-link" href="#main">跳到主要内容</a>
@@ -100,8 +100,9 @@
         <label for="profile-label">环境名称</label><input id="profile-label" name="label" required maxlength="80" placeholder="例如：印度 · 工作账号" autocomplete="off">
         <label for="profile-account">账号代号 <span class="field-optional">可选，仅保存在本机</span></label><input id="profile-account" name="accountLabel" maxlength="80" placeholder="例如：work-in-01，无需填写邮箱" autocomplete="off"><p class="field-help">相同代号用于避免在本应用中同时启动多个受控环境；不会读取登录身份，也不管理外部设备。</p>
         <label for="profile-country">目标国家/地区 <span class="field-optional">两位国家代码</span></label><input id="profile-country" name="country" required pattern="[A-Za-z]{2}" maxlength="2" list="country-options" placeholder="US" autocomplete="off" class="country-input" aria-describedby="country-help"><p id="country-help" class="field-help">美国 US · 日本 JP · 韩国 KR · 印度 IN · 尼日利亚 NG</p>
-        <label for="profile-proxy">代理地址 <span class="field-optional">可稍后配置</span></label><input id="profile-proxy" name="proxy" maxlength="256" placeholder="socks5://127.0.0.1:1081" autocomplete="off" spellcheck="false" aria-describedby="proxy-help"><p id="proxy-help" class="field-help">支持 http://主机:端口 或 socks5://主机:端口。协议和端口必须与服务商提供的一致；账号密码在下方单独填写。</p>
+        <label for="profile-proxy">代理地址 <span class="field-optional">可稍后配置</span></label><input id="profile-proxy" name="proxy" maxlength="4096" placeholder="socks5://用户名:密码@主机:端口" autocomplete="off" spellcheck="false" aria-describedby="proxy-help proxy-import-status"><p id="proxy-help" class="field-help">可直接粘贴完整 SOCKS5 认证链接，自动拆分地址、用户名和密码。也支持不含认证的 http://主机:端口 或 socks5://主机:端口。</p>
         <div class="field-grid proxy-auth-fields"><div><label for="proxy-username">代理用户名 <span class="field-optional">可选</span></label><input id="proxy-username" maxlength="255" autocomplete="off" spellcheck="false"></div><div><label for="proxy-password">代理密码 <span class="field-optional">可选</span></label><input id="proxy-password" type="password" maxlength="255" autocomplete="new-password"></div></div>
+        <p id="proxy-import-status" class="field-help" role="status" hidden></p>
         <p id="proxy-auth-help" class="field-help">填写代理商提供的凭据，不是 Google 密码。由当前 Windows 用户加密保存，不会放入浏览器命令行或导出记录。</p>
         <label id="clear-proxy-auth-label" class="check-label" for="clear-proxy-auth" hidden><input id="clear-proxy-auth" type="checkbox"><span>清除已保存的代理认证</span></label>
         <div class="proxy-form-actions"><button id="diagnose-proxy" class="button button-small button-primary" type="button">诊断代理</button><button id="find-public-proxy" class="button button-small button-outline" type="button">我没有代理，去筛选免费节点 ↓</button></div>

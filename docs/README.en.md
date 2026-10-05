@@ -19,6 +19,7 @@ Open `http://127.0.0.1:4317`. The interface is currently Chinese. India and Nige
 
 ## Features
 
+- Paste a full authenticated SOCKS5 URI into the proxy field to split the endpoint and decoded credentials automatically. Passwords stay in the masked password field. Clicking outside a settings dialog keeps it open and preserves the draft.
 - Independent persistent browser directories and per-profile proxies.
 - Actionable authentication/protocol/target diagnostics and explicitly applied protocol suggestions, with no direct-network fallback.
 - Public-proxy batches of up to 30 candidates, at most three concurrent checks, progress/cancellation, and a default view of country/Google checks passed within two minutes. No verified residential IP supply is promised.

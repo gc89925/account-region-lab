@@ -13,7 +13,7 @@ import { createCredentialVault, validateProxyAuth } from './lib/proxy-auth.js';
 import { createSocksBridge } from './lib/socks-bridge.js';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
-const VERSION = '0.3.0';
+const VERSION = '0.3.1';
 
 function respond(res, status, data) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -292,7 +292,7 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
         }
         return respond(res, 404, { error: '接口不存在。' });
       }
-      const assets = { '/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'] };
+      const assets = { '/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/proxy-input.js': ['proxy-input.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'] };
       if (req.method === 'GET' && Object.hasOwn(assets, url.pathname)) {
         const [filename, type] = assets[url.pathname];
         res.setHeader('Content-Type', `${type}; charset=utf-8`);

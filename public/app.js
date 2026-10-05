@@ -1,4 +1,4 @@
-'use strict';
+import { applyProxyInput } from './proxy-input.js';
 
 const $ = (selector) => document.querySelector(selector);
 const countryNames = { IN: '印度', NG: '尼日利亚', CN: '中国', US: '美国', GB: '英国', JP: '日本', KR: '韩国', SG: '新加坡', DE: '德国', CA: '加拿大', AU: '澳大利亚' };
@@ -373,6 +373,8 @@ function openProfileDialog(profile = null, defaults = {}) {
   const values = profile || defaults.template || {};
   editedEnvironmentFields.clear();
   $('#profile-form').reset();
+  $('#profile-proxy').setCustomValidity('');
+  $('#proxy-import-status').hidden = true;
   $('#profile-dialog-title').textContent = profile ? '编辑环境' : defaults.template ? '复制为新环境' : '新建环境';
   $('#profile-submit').textContent = profile ? '保存环境' : '创建环境';
   $('#profile-label').value = defaults.template ? `${values.label} · 副本`.slice(0, 80) : values.label || defaults.label || '';
@@ -380,7 +382,7 @@ function openProfileDialog(profile = null, defaults = {}) {
   $('#profile-account').disabled = Boolean(profile?.session?.active);
   $('#profile-country').value = values.country || defaults.country || 'US';
   $('#profile-proxy').value = values.proxy || defaults.proxy || '';
-  $('#profile-proxy').placeholder = defaults.fanout ? 'socks5://127.0.0.1:1080' : 'socks5://127.0.0.1:1081';
+  $('#profile-proxy').placeholder = defaults.fanout ? 'socks5://127.0.0.1:1080' : 'socks5://用户名:密码@主机:端口';
   $('#proxy-username').value = values.proxyUsername || '';
   $('#proxy-password').value = '';
   $('#proxy-password').placeholder = profile?.proxyAuthConfigured ? '已保存；留空保留原密码' : '代理服务提供的密码';
@@ -438,7 +440,7 @@ function profileFormBody() {
   if (!profileLocked(profile)) Object.assign(body, {
     country: $('#profile-country').value.trim().toUpperCase(),
     proxy: $('#profile-proxy').value.trim(),
-    proxyUsername: $('#proxy-username').value.trim(),
+    proxyUsername: $('#proxy-username').value,
     proxyPassword: $('#proxy-password').value,
     clearProxyAuth: $('#clear-proxy-auth').checked,
     strictIp: $('#profile-strict-ip').checked,
@@ -459,6 +461,26 @@ function resetProxyDiagnosis() {
   $('#proxy-diagnosis').replaceChildren();
   $('#diagnose-proxy').disabled = false;
   $('#diagnose-proxy').textContent = '诊断代理';
+}
+
+function importProxyCredentials(value) {
+  const field = $('#profile-proxy');
+  const status = $('#proxy-import-status');
+  if (field.disabled || field.readOnly) return;
+  field.setCustomValidity('');
+  try {
+    const result = applyProxyInput({ proxy: field, username: $('#proxy-username'), password: $('#proxy-password'), clearAuth: $('#clear-proxy-auth') }, value);
+    if (!result.applied || !result.hasCredentials) return;
+    status.className = 'field-help';
+    status.textContent = '已自动填入代理地址、用户名和密码。密码已从地址栏移除；可直接诊断或保存。';
+    status.hidden = false;
+  } catch (error) {
+    field.setCustomValidity(error.message);
+    status.className = 'form-error';
+    status.textContent = error.message;
+    status.hidden = false;
+  }
+  resetProxyDiagnosis();
 }
 
 function renderProxyDiagnosis(result, input) {
@@ -506,11 +528,12 @@ function renderProxyDiagnosis(result, input) {
 }
 
 async function diagnoseProxy() {
+  if (!$('#profile-proxy').reportValidity()) return;
   const proxy = $('#profile-proxy').value.trim();
   if (!proxy) { $('#profile-proxy').focus(); toast('先填写代理地址，再诊断连接。', 'error'); return; }
   const profile = state.profiles.find((item) => item.id === editingProfileId);
   const input = { proxy, country: $('#profile-country').value.trim().toUpperCase(),
-    proxyUsername: $('#proxy-username').value.trim(), proxyPassword: $('#proxy-password').value,
+    proxyUsername: $('#proxy-username').value, proxyPassword: $('#proxy-password').value,
     clearProxyAuth: $('#clear-proxy-auth').checked };
   if (profile && profile.proxy === proxy) input.profileId = profile.id;
   const sequence = ++diagnosisSequence;
@@ -924,6 +947,22 @@ function updateCountryDefaults() {
 $('#profile-country').addEventListener('input', updateCountryDefaults);
 $('#profile-country').addEventListener('change', updateCountryDefaults);
 for (const id of ['profile-proxy', 'profile-country', 'proxy-username', 'proxy-password']) document.getElementById(id).addEventListener('input', resetProxyDiagnosis);
+$('#profile-proxy').addEventListener('paste', (event) => {
+  const field = event.currentTarget;
+  if (field.disabled || field.readOnly) return;
+  const value = event.clipboardData?.getData('text/plain');
+  if (value?.includes('@')) {
+    event.preventDefault();
+    importProxyCredentials(value);
+  }
+});
+$('#profile-proxy').addEventListener('input', (event) => {
+  const field = event.currentTarget;
+  if (field.disabled || field.readOnly) return;
+  field.setCustomValidity('');
+  $('#proxy-import-status').hidden = true;
+  if (field.value.includes('@')) importProxyCredentials(field.value);
+});
 $('#diagnose-proxy').addEventListener('click', diagnoseProxy);
 $('#clear-proxy-auth').addEventListener('change', () => {
   const disabled = $('#clear-proxy-auth').checked || profileLocked(state.profiles.find((item) => item.id === editingProfileId));
@@ -957,13 +996,6 @@ $('#open-devices').addEventListener('click', (event) => {
   if (profile) launchTarget(profile, 'devices', event.currentTarget);
 });
 document.querySelectorAll('[data-close]').forEach((button) => button.addEventListener('click', () => document.getElementById(button.dataset.close).close()));
-document.querySelectorAll('dialog').forEach((dialog) => {
-  dialog.addEventListener('click', (event) => {
-    if (event.target !== dialog) return;
-    const rect = dialog.getBoundingClientRect();
-    if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) dialog.close();
-  });
-});
 
 $('#profile-form').addEventListener('submit', (event) => saveForm({
   event,
