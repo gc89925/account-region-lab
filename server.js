@@ -49,6 +49,7 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
   const release = acquireLock(dataDir);
   vault ||= createCredentialVault(remoteMode ? {keyPath:join(dataDir, 'proxy-vault.key')} : {});
   const file = join(dataDir, 'state.json');
+  const effectiveInput = input => remoteMode ? { ...input, environment:{ ...input.environment, engine:'native' } } : input;
   let state;
   try {
     state = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : { version: 1, profiles: [
@@ -57,7 +58,7 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
     if (state.version !== 1 || !Array.isArray(state.profiles)) throw new Error('不支持的数据文件版本。');
     for (const p of state.profiles) {
       if (!/^[a-f0-9-]{36}$/.test(p.id) || !Array.isArray(p.checks) || !Array.isArray(p.observations) || !Array.isArray(p.launches)) throw new Error('数据文件格式有误。');
-      const normalized = profileInput({ ...p, strictIp: p.strictIp ?? false });
+      const normalized = profileInput(effectiveInput({ ...p, strictIp: p.strictIp ?? false }));
       Object.assign(p, normalized);
       p.deviceReviews ||= [];
       p.expectedIp ||= null;
@@ -224,7 +225,7 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
         }
         if (req.method === 'POST' && url.pathname === '/api/profiles') {
           if (state.profiles.length >= 100) throw new Error('第一版最多支持 100 个环境。');
-          const p = makeProfile(body);
+          const p = makeProfile(effectiveInput(body));
           Object.assign(p, await saveAuth(body, null, p.proxy));
           state.profiles.push(p); save();
           return respond(res, 201, displayProfile(p));
@@ -236,7 +237,7 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
         if (busy.has(profile.id)) return respond(res, 409, { error: '这个环境正在检测或启动，请稍后再试。' });
         lockedId = profile.id; busy.add(lockedId);
         if (req.method === 'PATCH' && !match[2]) {
-          const updated = profileInput({ ...profile, ...body });
+          const updated = profileInput(effectiveInput({ ...profile, ...body }));
           const authentication = await saveAuth(body, profile, updated.proxy);
           const authChanged = JSON.stringify(authentication.proxyAuth) !== JSON.stringify(profile.proxyAuth || null);
           if (updated.accountLabel !== profile.accountLabel && sessionActive(profile.id)) throw new Error('请先关闭环境浏览器，再修改账号代号。');

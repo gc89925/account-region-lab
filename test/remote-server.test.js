@@ -145,6 +145,7 @@ test('remote launches use the remote launcher for both engines and reuse the sam
   assert.equal(afterClose.expectedIp, beforeClose.expectedIp);
 
   const managed = await app.create({ label: 'Remote overrides managed engine', environment: { engine: 'managed' } });
+  assert.equal(managed.environment.engine, 'native', 'Server settings must describe the effective native browser');
   assert.equal((await app.post(`/api/profiles/${managed.id}/launch`, { target: 'signin' })).status, 200);
   assert.equal(app.calls.remote.at(-1).profile.id, managed.id);
   assert.notEqual(app.calls.remote.at(-1).profileDir, app.calls.remote[0].profileDir);

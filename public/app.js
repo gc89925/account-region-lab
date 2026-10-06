@@ -476,7 +476,7 @@ function openProfileDialog(profile = null, defaults = {}) {
   $('#profile-strict-ip').checked = values.strictIp !== false;
   const environment = values.environment || {};
   const localeDefaults = environmentDefaults[$('#profile-country').value] || { locale: 'en-US', timezoneId: 'UTC' };
-  $('#environment-engine').value = environment.engine || 'native';
+  $('#environment-engine').value = remoteBrowserEnabled() ? 'native' : environment.engine || 'native';
   $('#environment-locale').value = environment.locale || localeDefaults.locale;
   $('#environment-timezone').value = environment.timezoneId || localeDefaults.timezoneId;
   $('#environment-width').value = environment.viewport?.width || 1365;
@@ -485,6 +485,7 @@ function openProfileDialog(profile = null, defaults = {}) {
   $('#environment-details').open = false;
   const isBound = profileLocked(profile);
   ['profile-country', 'profile-proxy', 'proxy-username', 'proxy-password', 'clear-proxy-auth', 'profile-strict-ip', 'environment-engine', 'environment-locale', 'environment-timezone', 'environment-width', 'environment-height', 'environment-color'].forEach((id) => { document.getElementById(id).disabled = isBound; });
+  if (remoteBrowserEnabled()) $('#environment-engine').disabled = true;
   $('#profile-binding-note').textContent = isBound
     ? `这个环境已启动过浏览器，国家、代理、IP 绑定选项和浏览器设置已固定。${profile?.session?.active ? '关闭浏览器后可修改账号代号。' : '仍可修改名称与账号代号。'}需要更换设置时请新建环境。`
     : '首次打开浏览器（包括环境诊断）后，国家、代理与浏览器设置固定。严格 IP 绑定会在首次出口检查通过并启动浏览器后记录出口。';
