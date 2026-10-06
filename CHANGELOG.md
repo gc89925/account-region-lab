@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.2 — 2026-10-06
+
+- Require a GET connectivity check of the selected Google destination, through the same proxy, before every external browser launch. Matching exit country alone is insufficient.
+- Network checks include the Google sign-in endpoint; failed destination checks remain visible and do not launch a browser or create a new IP binding/cycle.
+- Preserve upstream SOCKS target rejection details and the caller's timeout cause. Launch feedback distinguishes a sent request from a rendered page or a signed-in account.
+
 ## 0.3.1 — 2026-10-06
 
 - Pasting an authenticated SOCKS5 URI splits its address, decoded username and password into separate settings fields without displaying credentials in feedback.

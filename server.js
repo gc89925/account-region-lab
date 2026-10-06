@@ -5,7 +5,7 @@ import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isIP } from 'node:net';
 import { LINKS, countryCode, makeProfile, profileInput, withStats, buildBrowserArgs, targetUrl, validateProxy } from './lib/model.js';
-import { defaultDataDir, detectBrowser, probeProxy, probeGoogle, diagnoseProxy, launchBrowser, atomicSave, acquireLock } from './lib/runtime.js';
+import { defaultDataDir, detectBrowser, probeProxy, probeGoogle, probeDestination, diagnoseProxy, launchBrowser, atomicSave, acquireLock } from './lib/runtime.js';
 import { createManagedLauncher } from './lib/managed.js';
 import { createCatalog } from './lib/catalog.js';
 import { createPublicProxyCatalog } from './lib/public-proxies.js';
@@ -13,7 +13,7 @@ import { createCredentialVault, validateProxyAuth } from './lib/proxy-auth.js';
 import { createSocksBridge } from './lib/socks-bridge.js';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
-const VERSION = '0.3.1';
+const VERSION = '0.3.2';
 
 function respond(res, status, data) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -36,7 +36,7 @@ async function readBody(req) {
   } catch { throw new Error('请求 JSON 无效。'); }
 }
 
-export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || defaultDataDir(), probe = probeProxy, google = probeGoogle, diagnose = diagnoseProxy, launch = launchBrowser, browser = detectBrowser(), managed = createManagedLauncher(), catalog = createCatalog(), publicProxies = createPublicProxyCatalog(), vault = createCredentialVault(), createBridge = createSocksBridge } = {}) {
+export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || defaultDataDir(), probe = probeProxy, google = probeGoogle, destinationProbe = probeDestination, diagnose = diagnoseProxy, launch = launchBrowser, browser = detectBrowser(), managed = createManagedLauncher(), catalog = createCatalog(), publicProxies = createPublicProxyCatalog(), vault = createCredentialVault(), createBridge = createSocksBridge } = {}) {
   dataDir = resolve(dataDir);
   const workspaceId = createHash('sha256').update(process.platform === 'win32' ? dataDir.toLowerCase() : dataDir).digest('hex').slice(0,24);
   const instanceId = randomBytes(12).toString('hex');
@@ -114,7 +114,14 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
     return bridgeStarts.get(profile.id);
   }
 
-  async function check(profile) {
+  function probeDetail(error, network) {
+    // The caller can time out before the bridge sees its socket close. Keep
+    // that original cause instead of replacing it with the resulting close.
+    if (error.diagnostic?.code === 'proxy_timeout' && ['proxy_closed', 'proxy_connect_failed'].includes(network?.lastError?.code)) return error.diagnostic;
+    return network?.lastError || error.diagnostic;
+  }
+
+  async function check(profile, target = 'signin') {
     let record;
     let network;
     try {
@@ -128,7 +135,15 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
       record = { at: new Date().toISOString(), ok, ip: result.ip, country: actual,
         ...(Number.isFinite(result.latencyMs) ? { latencyMs: result.latencyMs } : {}),
         ...(ok ? {} : { error: changedIp ? '出口 IP 与该环境固定绑定值不同，已拦截启动。请恢复原线路，或新建环境。' : `出口地区为 ${actual}，目标为 ${profile.country}。已拦截启动。` }) };
-    } catch (err) { const detail = network?.lastError || err.diagnostic; record = { at: new Date().toISOString(), ok: false, error: detail?.message || err.message, ...(detail ? { diagnostic: detail } : {}) }; }
+      if (ok) {
+        const destination = await destinationProbe(network.proxy, targetUrl(profile, target));
+        Object.assign(record, {target, targetReachable:destination.ok === true, targetHttpStatus:destination.httpStatus ?? null});
+        if (!destination.ok) {
+          const detail = probeDetail({diagnostic:destination.diagnostic}, network);
+          Object.assign(record, {ok:false, error:`出口国家检查通过，但 Google 目标页面连接失败：${detail?.message || destination.error || 'HTTPS 请求未通过。'} 未启动浏览器。`, ...(detail ? {diagnostic:detail} : {})});
+        }
+      }
+    } catch (err) { const detail = probeDetail(err, network); record = { ...(record || {}), at: new Date().toISOString(), ok: false, error: detail?.message || err.message, ...(detail ? { diagnostic: detail } : {}) }; }
     profile.checks.push(record);
     profile.checks = profile.checks.slice(-500);
     save();
@@ -188,7 +203,7 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
             const tested = temporary?.proxy || proxy;
             const result = await diagnose(tested, {tryAlternateProtocol: !auth});
             result.configuredProtocol = new URL(proxy).protocol.slice(0,-1);
-            if (!result.ok && temporary?.lastError) result.error = temporary.lastError;
+            if (!result.ok && temporary?.lastError) result.error = probeDetail({diagnostic:result.error}, temporary);
             if (result.ok) {
               result.targetCountryMatches = result.probe.country === country;
               result.googleReachable = await google(tested);
@@ -243,7 +258,7 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
           }
           let result;
           if (body.target !== 'diagnostics') {
-            result = await check(profile);
+            result = await check(profile, body.target);
             if (!result.ok) throw new Error(result.error);
           }
           const profileDir = join(dataDir, 'profiles', profile.id);
@@ -267,7 +282,7 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
           profile.launches = profile.launches.slice(-500);
           save();
           if (opening?.ok === false) throw new Error('浏览器已启动，但目标页面未加载成功。环境设置已固定；可关闭受控环境后检查线路重试。');
-          return respond(res, 200, { ok: true, message: `已向本机 ${browser.name} 打开此环境。请切换到弹出的独立浏览器窗口完成 Google 登录；登录表单不在工作台内。本工具尚未确认登录状态。`, profile: displayProfile(profile) });
+          return respond(res, 200, { ok: true, message: `${result ? '启动前的出口与 Google 目标页面连通检查已通过。' : '已请求打开本机诊断页，未检查外网连接。'}已向本机独立浏览器窗口发送打开请求，请切换到 ${browser.name} 查看。此检查不保证页面持续可用，本工具尚未确认登录状态。`, profile: displayProfile(profile) });
         }
         if (match[2] === 'device-review') {
           if (typeof body.otherSessionsSignedOut !== 'boolean' || typeof body.currentSessionKept !== 'boolean') throw new Error('请明确填写设备核查结果。');

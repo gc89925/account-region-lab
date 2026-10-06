@@ -11,7 +11,7 @@ async function fixture(t, overrides = {}) {
   const active = new Set(), opened = [], native = [];
   const managed = { isActive: id => active.has(id), open: async config => { active.add(config.profile.id); opened.push(config); return {ok:true}; }, close: async id => active.delete(id), closeAll: async () => active.clear() };
   const options = { dataDir, browser: { name: 'Test', path: '/fake/chrome' }, launch: async (_,args) => { native.push(args); return {pid:42}; }, managed,
-    probe: async () => ({ ip: '203.0.113.10', country: 'IN' }), catalog: {list:async country=>({country,total:0,nodes:[]})}, ...overrides };
+    probe: async () => ({ ip: '203.0.113.10', country: 'IN' }), destinationProbe: async () => ({ok:true,httpStatus:200}), catalog: {list:async country=>({country,total:0,nodes:[]})}, ...overrides };
   let lab, base;
   async function start() { lab=createLabServer(options); lab.server.listen(0,'127.0.0.1'); await once(lab.server,'listening'); base=`http://127.0.0.1:${lab.server.address().port}`; }
   await start();

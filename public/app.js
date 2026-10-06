@@ -87,7 +87,7 @@ async function api(path, options = {}) {
     headers['X-Lab-Token'] = state.token;
   }
   const controller = new AbortController();
-  const timeoutMs = path.endsWith('/launch') ? 120000 : path === '/api/proxy/diagnose' ? 100000 : path === '/api/proxies/check' ? 55000 : 25000;
+  const timeoutMs = path.endsWith('/launch') ? 120000 : path === '/api/proxy/diagnose' ? 100000 : path.endsWith('/check') ? 55000 : 25000;
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(path, { cache: 'no-store', ...options, headers, signal: controller.signal });
@@ -245,6 +245,7 @@ function renderProfile(profile) {
       status = '出口 IP 已变化';
       statusClass = 'warning';
     }
+    if (check?.targetReachable === false) { status = 'Google 页面不可达'; statusClass = 'error'; }
   }
   statusRow.append(element('span', `status-pill ${statusClass}`, status), actionButton('检查网络 ↗', 'network-check', (button) => checkNetwork(profile, button), busy, `检查${profile.label}的网络出口`));
   card.append(statusRow);
@@ -348,20 +349,20 @@ function checkNetwork(profile, button) {
   if (!prepareNetworkAction(profile)) return;
   return profileAction(profile, button, 'check', {}, (check) => {
     const current = { ...(state.profiles.find((item) => item.id === profile.id) || profile), checks: [check] };
-    if (check?.ok && current && checkMatches(current)) setOperationStatus(profile, `出口检查通过：${countryName(check.country)}。下一步点击“登录 Google 账号”，到本机独立浏览器窗口完成登录。`, 'success');
+    if (check?.ok && current && checkMatches(current)) setOperationStatus(profile, `出口国家与 Google 登录页连通检查通过：${countryName(check.country)}。下一步点击“登录 Google 账号”。这不代表已登录或线路持续可用。`, 'success');
     else if (check?.ip && current?.strictIp && current.expectedIp && check.ip !== current.expectedIp) setOperationStatus(profile, `出口 IP 已变为 ${check.ip}，与绑定的 ${current.expectedIp} 不一致，启动将被拦截。`, 'warning');
     else if (check?.country && check.country === current?.country && !check.ok) setOperationStatus(profile, check.error || '网络检查未通过。请编辑代理配置后重试。', 'error');
     else if (check?.country) setOperationStatus(profile, `实际出口为${countryName(check.country)}，与目标${countryName(profile.country)}不一致。请检查代理线路后重试。`, 'warning');
     else setOperationStatus(profile, check?.error || '网络检查未通过，请编辑代理配置后重试。', 'error');
-  }, '正在通过此环境的代理检查出口 IP 和国家…');
+  }, '正在检查代理出口、国家与 Google 登录页 HTTPS 连通性…');
 }
 
 function launchTarget(profile, target, button) {
   if (!prepareNetworkAction(profile, { browser: true })) return;
   const names = { signin: 'Google 登录页', gmail: 'Gmail', youtube: 'YouTube', terms: 'Google 服务条款页', appeal: '官方国家/地区变更申请', devices: 'Google 官方设备管理页', diagnostics: '本机环境诊断页（未执行出口国家检查）' };
-  return profileAction(profile, button, 'launch', { target }, () => setOperationStatus(profile,
-    `已向本机独立 ${state.browser?.name || 'Chrome / Edge'} 发送打开${names[target]}的请求。请切换到任务栏中的浏览器${target === 'signin' ? '完成登录' : '查看页面'}；网页内不会嵌入该窗口，工具未确认 Google 登录状态。`, 'success'),
-  target === 'diagnostics' ? '正在启动本机独立浏览器并打开诊断页，最多等待 2 分钟…' : '正在检查代理出口，成功后启动本机独立 Chrome / Edge 窗口。线路较慢时最多等待 2 分钟…');
+  return profileAction(profile, button, 'launch', { target }, (result) => setOperationStatus(profile,
+    result.message || `已发送打开${names[target]}的请求；尚未确认页面加载或登录状态。`, 'success'),
+  target === 'diagnostics' ? '正在启动本机独立浏览器并打开诊断页，最多等待 2 分钟…' : `正在检查代理出口及${names[target]} HTTPS 连通性，通过后才发送打开请求。线路较慢时最多等待 2 分钟…`);
 }
 
 function startCycle(profile, button) {

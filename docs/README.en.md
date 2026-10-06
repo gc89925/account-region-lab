@@ -23,7 +23,7 @@ Open `http://127.0.0.1:4317`. The interface is currently Chinese. India and Nige
 - Independent persistent browser directories and per-profile proxies.
 - Actionable authentication/protocol/target diagnostics and explicitly applied protocol suggestions, with no direct-network fallback.
 - Public-proxy batches of up to 30 candidates, at most three concurrent checks, progress/cancellation, and a default view of country/Google checks passed within two minutes. No verified residential IP supply is promised.
-- Country checks before each external launch; optional strict IP pinning blocks a changed IP even in the same country. This is not continuous network enforcement.
+- Country checks and a GET request to the exact selected Google destination through the same proxy before each external launch; a matching country alone does not allow launch. The request does not follow redirects and 2xx/3xx only proves point-in-time URL reachability. Optional strict IP pinning blocks a changed IP even in the same country. This is not continuous network enforcement or proof of a rendered page/sign-in.
 - Native Chrome/Edge mode, or experimental Playwright-managed mode with locale, timezone, viewport and color-scheme settings. Managed mode does not hide `navigator.webdriver` and may be incompatible with Google sign-in.
 - Local diagnostics comparing requested and observed settings without network, telemetry or STUN requests.
 - Official Google device-page guidance and user-confirmed review records. No personal-Gmail bulk sign-out API is implemented.

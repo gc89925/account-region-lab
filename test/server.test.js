@@ -15,6 +15,7 @@ async function fixture(t, overrides = {}) {
     dataDir,
     browser: { name: 'Test browser', path: 'fake-browser' },
     probe: async () => ({ ip: '203.0.113.10', country: 'IN' }),
+    destinationProbe: async () => ({ok:true,httpStatus:200,latencyMs:1}),
     launch: async (browserPath, args) => { launches.push({ browserPath, args }); return { pid: 123 }; },
     ...overrides,
   };
@@ -275,4 +276,42 @@ test('explicit Google sign-in uses the isolated profile and still requires a mat
   assert.equal(app.launches[0].args.at(-1),'https://accounts.google.com/');
   assert.match(result.value.message,/独立浏览器窗口/);
   assert.match(result.value.message,/尚未确认登录状态/);
+});
+
+test('matching country is insufficient when the Google destination fails, without launching or pinning', async t => {
+  const targets = [];
+  const app = await fixture(t, {
+    destinationProbe: async (proxy,url) => {
+      targets.push({proxy,url});
+      return {ok:false,httpStatus:null,error:'Target refused',diagnostic:{code:'socks_target_refused',stage:'target_connect',message:'代理拒绝连接目标。'}};
+    },
+  });
+  const profile = await app.create('Destination unavailable');
+  const result = await app.request(`/api/profiles/${profile.id}/launch`, {method:'POST',body:{target:'signin'}});
+  assert.equal(result.status,400);
+  assert.match(result.value.error,/Google 目标页面连接失败/);
+  assert.match(result.value.error,/未启动浏览器/);
+  assert.deepEqual(targets,[{proxy:profile.proxy,url:'https://accounts.google.com/'}]);
+  assert.equal(app.launches.length,0);
+  const saved = (await app.state()).profiles.find(p=>p.id===profile.id);
+  assert.equal(saved.expectedIp,null);
+  assert.equal(saved.cycleStartedAt,null);
+  assert.deepEqual(saved.launches,[]);
+  assert.equal(saved.checks.at(-1).country,'IN');
+  assert.equal(saved.checks.at(-1).targetReachable,false);
+  assert.equal(saved.checks.at(-1).ok,false);
+});
+
+test('every launch probes its actual selected target and network checks probe Google sign-in', async t => {
+  const targets=[];
+  const app=await fixture(t,{destinationProbe:async(proxy,url)=>{targets.push({proxy,url});return {ok:true,httpStatus:302};}});
+  const profile=await app.create('Destination guard');
+  const endpoint=`/api/profiles/${profile.id}`;
+  for(const target of ['gmail','youtube']) assert.equal((await app.request(endpoint+'/launch',{method:'POST',body:{target}})).status,200);
+  assert.equal((await app.request(endpoint+'/check',{method:'POST',body:{}})).status,200);
+  assert.deepEqual(targets.map(t=>t.url),['https://mail.google.com/','https://www.youtube.com/','https://accounts.google.com/']);
+  assert.ok(targets.every(t=>t.proxy===profile.proxy));
+  const saved=(await app.state()).profiles.find(p=>p.id===profile.id);
+  assert.equal(saved.checks.at(-1).targetHttpStatus,302);
+  assert.equal(saved.checks.at(-1).targetReachable,true);
 });

@@ -93,6 +93,27 @@ test('SOCKS bridge authenticates UTF-8 credentials and preserves fragmented fram
   assert.equal(bridge.lastError,null);assert.deepEqual(upstream.errors,[]);
 });
 
+test('SOCKS bridge carries data arriving after both CONNECT frames have been consumed', {timeout:3000},async t=>{
+  const outgoing=Buffer.from('client TLS hello after CONNECT'),incoming=Buffer.from('server TLS hello after CONNECT');
+  const request=destination('post-handshake.invalid');
+  const upstream=await listener(t,async socket=>{
+    const reader=await upstreamAuthentication(socket);
+    assert.deepEqual(await reader.read(request.length),request);
+    socket.write(Buffer.from([5,0,0,1,127,0,0,1,0,1]));
+    assert.deepEqual(await reader.read(outgoing.length),outgoing);
+    await new Promise(resolve=>setTimeout(resolve,30));
+    socket.write(incoming);
+  });
+  const bridge=await createSocksBridge(upstream.proxy,credentials);t.after(()=>bridge.close());
+  const {socket,reader}=await client(t,bridge.proxy);
+  socket.write(Buffer.from([5,1,0]));assert.deepEqual(await reader.read(2),Buffer.from([5,0]));
+  socket.write(request);assert.deepEqual(await reader.read(10),Buffer.from([5,0,0,1,127,0,0,1,0,1]));
+  await new Promise(resolve=>setTimeout(resolve,30));
+  socket.write(outgoing);
+  assert.deepEqual(await reader.read(incoming.length),incoming);
+  assert.deepEqual(upstream.errors,[]);
+});
+
 test('a rejected password returns a sanitized diagnostic and never directly contacts the target', {timeout:10000},async t=>{
   let directConnections=0;
   const target=await listener(t,socket=>{directConnections++;socket.destroy();});
@@ -107,6 +128,25 @@ test('a rejected password returns a sanitized diagnostic and never directly cont
   assert.ok(!JSON.stringify(bridge.lastError).includes(wrong.password));
   assert.ok(!JSON.stringify(bridge.lastError).includes(wrong.username));
   assert.equal(directConnections,0);assert.deepEqual(upstream.errors,[]);
+});
+
+test('upstream target rejection preserves the SOCKS reply and records a sanitized target diagnostic', {timeout:10000},async t=>{
+  const upstream=await listener(t,async socket=>{
+    const reader=await upstreamAuthentication(socket);
+    const header=await reader.read(5);await reader.read(header[4]+2);
+    socket.write(Buffer.from([5,2,0,1,0,0,0,0,0,0]));
+  });
+  const bridge=await createSocksBridge(upstream.proxy,credentials);t.after(()=>bridge.close());
+  const {socket,reader}=await client(t,bridge.proxy);
+  socket.write(Buffer.from([5,1,0]));await reader.read(2);
+  socket.write(destination('blocked-target.invalid'));
+  assert.deepEqual(await reader.read(10),Buffer.from([5,2,0,1,0,0,0,0,0,0]));
+  assert.deepEqual(bridge.lastError,{
+    code:'socks_target_denied',stage:'target_connect',message:'SOCKS5 代理拒绝访问目标（规则或权限限制）。',retryable:true,socksReply:2,
+  });
+  assert.ok(!JSON.stringify(bridge.lastError).includes(credentials.username));
+  assert.ok(!JSON.stringify(bridge.lastError).includes(credentials.password));
+  assert.deepEqual(upstream.errors,[]);
 });
 
 test('an unreachable upstream fails closed even when the requested target is reachable', {timeout:10000},async t=>{

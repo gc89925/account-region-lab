@@ -56,6 +56,7 @@ async function fixture(t) {
       return structuredClone(control.diagnosis);
     },
     google: async proxy => { calls.google.push(proxy); return control.google; },
+    destinationProbe: async () => ({ok:true,httpStatus:200}),
     launch: async (browserPath, args) => { calls.launches.push({ browserPath, args }); return { pid: 123 }; },
   });
   lab.server.listen(0, '127.0.0.1');

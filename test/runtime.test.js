@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createServer } from 'node:net';
-import { acquireLock, curlArgs, diagnoseProxy, launchBrowser, probeErrorMessage, probeProxy, proxyErrorDetails } from '../lib/runtime.js';
+import { acquireLock, curlArgs, diagnoseProxy, launchBrowser, probeDestination, probeErrorMessage, probeGoogle, probeProxy, proxyErrorDetails } from '../lib/runtime.js';
 
 test('proxy probe disables curl configuration and environment bypasses and resolves SOCKS DNS through the proxy', () => {
   for (const proxy of ['http://127.0.0.1:18080', 'socks5://127.0.0.1:1080']) {
@@ -101,6 +101,86 @@ test('invalid geo data cannot become a passed probe and fallback does not hide a
   assert.equal(diagnosis.error.code, 'proxy_auth_required');
   assert.equal(diagnosis.alternateProtocol, undefined);
   assert.equal(calls, 1, 'An authentication reply proves SOCKS, so do not try a different protocol or host');
+});
+
+test('a successful geo lookup cannot substitute for access to the exact Google destination', async () => {
+  const calls = [];
+  const runCurl = async (_command, args) => {
+    const url = args.find(argument => argument.startsWith('https://'));
+    calls.push(url);
+    if (url === 'https://api.country.is/') return { stdout: '{"ip":"203.0.113.9","country":"US"}' };
+    throw { code: 97, stderr: 'cannot complete SOCKS5 connection to accounts.google.com. (5) private-password=secret' };
+  };
+  const proxy = 'socks5://127.0.0.1:1080';
+  assert.equal((await probeProxy(proxy, { runCurl })).country, 'US');
+  const result = await probeDestination(proxy, 'https://accounts.google.com/', { runCurl });
+  assert.equal(result.ok, false);
+  assert.equal(result.httpStatus, null);
+  assert.equal(result.diagnostic.code, 'socks_target_refused');
+  assert.equal(result.diagnostic.stage, 'target_connect');
+  assert.equal(result.error, result.diagnostic.message);
+  assert.ok(!JSON.stringify(result).includes('secret'));
+  assert.deepEqual(calls, ['https://api.country.is/', 'https://accounts.google.com/']);
+});
+
+test('destination GET uses the chosen proxy, discards the body and never follows redirects or disables TLS verification', async () => {
+  const result = await probeDestination('socks5://127.0.0.1:1080', 'https://policies.google.com/terms', {
+    runCurl: async (command, args, options) => {
+      assert.equal(command, 'curl');
+      assert.equal(args[0], '--disable');
+      assert.equal(args[args.indexOf('--proxy') + 1], 'socks5h://127.0.0.1:1080');
+      assert.equal(args[args.indexOf('--noproxy') + 1], '');
+      assert.equal(args[args.indexOf('--proto') + 1], '=https');
+      assert.ok(args.includes('https://policies.google.com/terms'));
+      assert.equal(args[args.indexOf('--output') + 1], process.platform === 'win32' ? 'NUL' : '/dev/null');
+      assert.equal(args[args.indexOf('--max-time') + 1], '15');
+      assert.equal(args[args.indexOf('--connect-timeout') + 1], '8');
+      assert.equal(args[args.indexOf('--max-filesize') + 1], '2097152');
+      assert.ok(!args.some(argument => ['--head', '--location', '--insecure', '--fail'].includes(argument)));
+      assert.equal(options.timeout, 15000);
+      assert.equal(options.env.HTTPS_PROXY, '');
+      assert.equal(options.env.NO_PROXY, '');
+      return { stdout: '302' };
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.httpStatus, 302);
+  assert.ok(result.latencyMs >= 0);
+});
+
+test('destination results reject HTTP failures and invalid status output without returning raw errors', async () => {
+  for (const status of ['403', '429', '502']) {
+    const result = await probeDestination('http://127.0.0.1:8080', 'https://accounts.google.com/', {
+      runCurl: async () => ({ stdout: status }),
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.httpStatus, Number(status));
+    assert.equal(result.diagnostic.code, 'target_http_failed');
+    assert.equal(result.diagnostic.retryable, status !== '403');
+  }
+  for (const stdout of ['000', '200 private information', 'not-an-http-status']) {
+    const result = await probeDestination('http://127.0.0.1:8080', 'https://accounts.google.com/', { runCurl: async () => ({ stdout }) });
+    assert.equal(result.ok, false);
+    assert.equal(result.diagnostic.code, 'target_invalid_response');
+    assert.ok(!JSON.stringify(result).includes(stdout));
+  }
+  const timeout = await probeDestination('http://127.0.0.1:8080', 'https://accounts.google.com/', {
+    runCurl: async () => { throw { code: 28, stderr: 'private-password=secret' }; },
+  });
+  assert.equal(timeout.diagnostic.code, 'proxy_timeout');
+  assert.ok(!JSON.stringify(timeout).includes('secret'));
+});
+
+test('destination probe rejects arbitrary hosts, protocols and credentials before running curl', async () => {
+  let called = false;
+  const runCurl = async () => { called = true; return { stdout: '200' }; };
+  for (const url of ['http://accounts.google.com/', 'https://accounts.google.com.evil.invalid/',
+    'https://user:password@accounts.google.com/', 'https://accounts.google.com:444/', 'file:///tmp/test', 'invalid']) {
+    await assert.rejects(probeDestination('http://127.0.0.1:8080', url, { runCurl }));
+  }
+  assert.equal(called, false);
+  assert.equal(await probeGoogle('http://127.0.0.1:8080', { runCurl }), true);
+  assert.equal(await probeGoogle('http://127.0.0.1:8080', { runCurl: async () => { throw { code: 7 }; } }), false);
 });
 
 test('diagnosis suggests a tested alternate protocol without changing the failed configured protocol', async () => {
