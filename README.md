@@ -6,11 +6,12 @@ Local browser profiles, proxy checks, device-review guidance, and country-associ
 
 [English guide](docs/README.en.md) · [调研依据](docs/research.md) · [fanout 接入](docs/fanout.md) · [验证范围](docs/verification.md) · [贡献指南](CONTRIBUTING.md)
 
-## v0.3 能做什么
+## v0.4 能做什么
 
 | 功能 | 实际行为 |
 | --- | --- |
 | 独立环境 | 每个环境使用独立持久浏览器目录，分隔 Cookie、站点存储和登录会话 |
+| 服务器浏览器 | 在海外 Linux 服务器运行原生 Chrome，本地通过 HTTPS 工作台内的远程画面操作；一次运行一个账号环境 |
 | 固定线路 | 单独配置 HTTP / SOCKS5 代理，启动前核对国家和所选 Google 页面连通性；新环境默认首次校验并启动后绑定出口 IP |
 | 设备退出助手 | 在该环境打开 Google 官方设备页，指导逐项退出其他会话，保存人工核查结果 |
 | 两种浏览器模式 | 原生 Chrome / Edge 兼容模式；可设置语言、时区、视口和外观的 Playwright 受控实验模式 |
@@ -22,6 +23,8 @@ Local browser profiles, proxy checks, device-review guidance, and country-associ
 | 观察记录 | 七天复查周期、手工记录 Google 条款页国家、设备核查和脱敏导出 |
 
 默认提供印度 `IN` 和尼日利亚 `NG` 环境。目标国家是你的配置，**不代表 Google 已把账号归属到那里**。
+
+希望本机不运行代理和账号浏览器，请使用[服务器部署方式](docs/server-deployment.md)：浏览器、节点检测和登录目录都在服务器上，网页提供键鼠与画面。入口包含独立登录、HTTPS 和会话校验。首版远程画面不传输音频，不适合把 YouTube 当作流畅视频播放器；本机仍需能够直接访问服务器网页。
 
 ## 快速开始
 
@@ -99,7 +102,7 @@ Google Workspace 管理员的 `users.signOut` API 不等于普通 Gmail 能力�
 
 v0.1 数据自动补齐新字段，原有记录不清空。旧环境保留原生模式和原来的按国家校验，不会自动开启严格 IP 绑定；新环境默认开启。修改旧环境前先备份数据并关闭相应浏览器。
 
-源码不包含登录会话。导出移除代理地址、认证密文、代理用户名、检测 IP、绑定 IP 和账号代号，仍保留环境名称和人工备注，分享前应检查。加密认证绑定当前 Windows 用户，复制到其他用户或电脑后需重新输入。浏览器目录包含敏感会话，**不要上传到 GitHub**。控制台只绑定本机，不适合多人共享或公网部署。[安全说明](SECURITY.md)。
+源码不包含登录会话。导出移除代理地址、认证密文、代理用户名、检测 IP、绑定 IP 和账号代号，仍保留环境名称和人工备注，分享前应检查。Windows 加密认证绑定当前用户；Linux 服务器模式使用独立 AES-GCM 密钥文件，需要随数据一起私密备份。浏览器目录包含敏感会话，**不要上传到 GitHub**。控制台始终只绑定回环地址；服务器部署必须经过 HTTPS 和访问认证网关，首版面向单用户。[安全说明](SECURITY.md)。
 
 ## 验证与贡献
 

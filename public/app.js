@@ -80,6 +80,69 @@ function profileLocked(profile) {
   return Boolean(profile?.locked ?? profile?.launches?.length);
 }
 
+function remoteBrowserEnabled() {
+  return state.capabilities?.remoteBrowser === true;
+}
+
+function remoteDesktopPath() {
+  const value = state.remoteDesktopUrl;
+  if (!remoteBrowserEnabled() || typeof value !== 'string' || !value.startsWith('/') || value.startsWith('//')) return null;
+  try {
+    const url = new URL(value, window.location.origin);
+    return url.origin === window.location.origin && url.pathname === '/desktop/vnc.html' && !url.username && !url.password
+      ? `${url.pathname}${url.search}` : null;
+  } catch { return null; }
+}
+
+function closeRemoteDesktop() {
+  $('#remote-desktop-frame-container').replaceChildren();
+  $('#remote-browser').hidden = true;
+  $('#open-remote-desktop').setAttribute('aria-expanded', 'false');
+}
+
+function openRemoteDesktop() {
+  const path = remoteDesktopPath();
+  if (!path) { toast('远程画面暂不可用，请刷新工作台状态后重试。', 'error'); return; }
+  const container = $('#remote-desktop-frame-container');
+  const current = container.querySelector('iframe');
+  if (!current || current.getAttribute('src') !== path) {
+    const frame = element('iframe', 'remote-desktop-frame');
+    frame.title = '服务器上的远程浏览器';
+    frame.src = path;
+    frame.allow = 'clipboard-read; clipboard-write; fullscreen';
+    frame.setAttribute('allowfullscreen', '');
+    container.replaceChildren(frame);
+  }
+  $('#remote-browser').hidden = false;
+  $('#open-remote-desktop').setAttribute('aria-expanded', 'true');
+  $('#remote-browser').scrollIntoView({ block: 'start', behavior: 'smooth' });
+}
+
+function renderRuntimeLocation() {
+  const remote = remoteBrowserEnabled();
+  $('#runtime-location').textContent = remote ? '在服务器运行' : '仅在本机运行';
+  $('#browser-location-label').textContent = remote ? '服务器浏览器' : '本机浏览器';
+  $('#hero-description').textContent = remote
+    ? '先配置账号专属代理，再点击环境卡片中的“登录 Google 账号”。浏览器运行在服务器上，通过本页“打开远程浏览器”完成登录和日常操作。'
+    : '先配置账号专属代理，再点击环境卡片中的“登录 Google 账号”。登录页会打开在本机独立 Chrome / Edge 窗口，请到任务栏切换。';
+  $('#signin-step-location').textContent = remote ? '③ 打开远程浏览器，在画面中登录' : '③ 到本机浏览器窗口登录';
+  $('#method-signin-description').textContent = remote
+    ? '点击对应环境的“登录 Google 账号”，程序检查出口后启动服务器上的独立浏览器。点击“打开远程浏览器”，在画面中自己完成登录，再回到环境卡片打开 Gmail 或 YouTube。一次只运行一个账号环境，切换前先关闭当前浏览器。使用“检查 / 退出其他设备”进入 Google 官方页面逐项管理会话。'
+    : '点击对应环境的“登录 Google 账号”，程序检查出口后启动本机独立 Chrome / Edge。到任务栏切换到新窗口，自己完成登录，再回到这里打开 Gmail 或 YouTube。使用“检查 / 退出其他设备”进入 Google 官方页面逐项管理会话。';
+  $('#runtime-footer').textContent = remote ? '服务器配置 · 人工观察 · 数据可导出' : '本机配置 · 人工观察 · 数据可导出';
+  $('#account-storage-hint').textContent = remote ? '可选，保存在此服务器' : '可选，仅保存在本机';
+  $('#open-remote-desktop').hidden = !remote;
+  $('#remote-logout').hidden = !remote;
+  const path = remoteDesktopPath();
+  $('#remote-desktop-tab').hidden = !path;
+  if (path) $('#remote-desktop-tab').href = path;
+  else { $('#remote-desktop-tab').removeAttribute('href'); closeRemoteDesktop(); }
+  const active = state.profiles.find((profile) => profile.session?.active);
+  $('#remote-browser-context').textContent = active
+    ? `当前环境：${active.label}。在下方画面操作浏览器，Google 邮箱、密码和验证码均在 Google 官方页面输入。`
+    : '尚未启动账号环境。请先在环境卡片点击“登录 Google 账号”，再在这里操作浏览器。';
+}
+
 async function api(path, options = {}) {
   const headers = { ...options.headers };
   if (options.method && options.method !== 'GET') {
@@ -92,12 +155,12 @@ async function api(path, options = {}) {
   try {
     const response = await fetch(path, { cache: 'no-store', ...options, headers, signal: controller.signal });
     const data = await response.json().catch(() => ({}));
-    if (response.status === 403) throw new Error('本地服务已重启或页面会话已失效。请点击“刷新状态”后重试。');
+    if (response.status === 403) throw new Error(`${remoteBrowserEnabled() ? '工作台' : '本地'}服务已重启或页面会话已失效。请点击“刷新状态”后重试。`);
     if (!response.ok) throw new Error(data.error || `请求失败（${response.status}）`);
     return data;
   } catch (error) {
     if (controller.signal.aborted) throw new Error(`请求超过 ${timeoutMs / 1000} 秒。代理检查或浏览器启动未及时返回；请检查线路，然后刷新状态确认结果，避免重复启动。`);
-    if (error instanceof TypeError) throw new Error('无法连接本地服务。请双击 Start.cmd，等待启动完成后再点击“刷新状态”；无需保留终端窗口。');
+    if (error instanceof TypeError) throw new Error(remoteBrowserEnabled() ? '无法连接服务器。请确认网络连接与服务器状态，然后点击“刷新状态”重试。' : '无法连接本地服务。请双击 Start.cmd，等待启动完成后再点击“刷新状态”；无需保留终端窗口。');
     throw error;
   } finally {
     window.clearTimeout(timer);
@@ -106,7 +169,7 @@ async function api(path, options = {}) {
 
 function operationStatus(profile) {
   return operationStates.get(profile.id) || { type: 'info', message: profile.proxy
-    ? '下一步：点击“登录 Google 账号”。会先检查出口，再在本机独立 Chrome / Edge 窗口中打开登录页。'
+    ? remoteBrowserEnabled() ? '下一步：点击“登录 Google 账号”。会先检查出口，再启动服务器浏览器；点击“打开远程浏览器”完成登录。' : '下一步：点击“登录 Google 账号”。会先检查出口，再在本机独立 Chrome / Edge 窗口中打开登录页。'
     : '第一步：配置此账号的代理地址。点击“登录 Google 账号”可进入设置。' };
 }
 
@@ -132,8 +195,15 @@ function prepareNetworkAction(profile, { browser = false } = {}) {
     return false;
   }
   if (browser && !state.browser) {
-    setOperationStatus(profile, '未检测到 Chrome 或 Edge。请安装浏览器，重启 Start.cmd，再点击“刷新状态”。', 'error');
+    setOperationStatus(profile, remoteBrowserEnabled() ? '服务器浏览器暂不可用，请检查服务状态后刷新工作台。' : '未检测到 Chrome 或 Edge。请安装浏览器，重启 Start.cmd，再点击“刷新状态”。', 'error');
     return false;
+  }
+  if (browser && remoteBrowserEnabled()) {
+    const active = state.profiles.find((item) => item.id !== profile.id && item.session?.active);
+    if (active) {
+      setOperationStatus(profile, `“${active.label}”的服务器浏览器仍在运行。请先在该环境卡片点击“关闭浏览器”，然后再启动此环境。`, 'warning');
+      return false;
+    }
   }
   if (browser && profile.environment?.engine === 'managed' && state.capabilities?.managed === false) {
     setOperationStatus(profile, '受控浏览器依赖未安装。请重新运行 Start.cmd 安装依赖，或新建“原生 Chrome / Edge”环境。', 'error');
@@ -160,7 +230,7 @@ async function loadState() {
     $('#connection-error').hidden = true;
     render();
   } catch (error) {
-    $('#connection-error').textContent = `无法读取本地服务：${error.message} 请确认服务仍在运行，然后刷新状态。`;
+    $('#connection-error').textContent = `无法读取${remoteBrowserEnabled() ? '工作台' : '本地'}服务：${error.message} 请确认服务仍在运行，然后刷新状态。`;
     $('#connection-error').hidden = false;
     if (!state.token) {
       $('#profile-grid').replaceChildren(element('div', 'empty-state loading-state', '连接恢复后，将在这里显示已保存的环境。'));
@@ -175,12 +245,13 @@ async function loadState() {
 
 function render() {
   const profiles = state.profiles;
+  renderRuntimeLocation();
   $('#stat-profiles').textContent = String(profiles.length).padStart(2, '0');
   $('#stat-configured').textContent = `${profiles.filter((p) => p.proxy).length} 个已配置代理`;
   $('#stat-healthy').textContent = String(profiles.filter(checkMatches).length).padStart(2, '0');
   $('#stat-reviews').textContent = String(profiles.filter((p) => p.cycleStartedAt && elapsedDays(p) >= 7).length).padStart(2, '0');
   $('#browser-name').textContent = state.browser?.name || '未检测到可用浏览器';
-  $('#browser-hint').textContent = state.browser ? '每个环境使用独立配置目录' : '安装 Chrome 或 Edge 后重启服务';
+  $('#browser-hint').textContent = state.browser ? remoteBrowserEnabled() ? '通过远程画面操作 · 每次运行一个环境' : '每个环境使用独立配置目录' : remoteBrowserEnabled() ? '检查服务器浏览器服务状态' : '安装 Chrome 或 Edge 后重启服务';
   $('#app-version').textContent = state.version ? ` / ${state.version}` : '';
   $('#profile-grid').replaceChildren(...profiles.map(renderProfile));
   if (!profiles.length) $('#profile-grid').append(element('div', 'empty-state loading-state', '还没有环境。点击“新建环境”开始。'));
@@ -258,7 +329,7 @@ function renderProfile(profile) {
   facts.append(network, region);
   card.append(facts);
   const isolation = element('div', 'isolation-meta');
-  isolation.append(element('span', '', profile.accountLabel ? `账号代号：${profile.accountLabel}` : '账号代号：未设置'), element('span', profile.session?.active ? 'session-active' : '', environment.engine !== 'managed' ? '原生会话状态需手动确认' : profile.session?.active ? '受控浏览器运行中' : '受控浏览器已关闭'));
+  isolation.append(element('span', '', profile.accountLabel ? `账号代号：${profile.accountLabel}` : '账号代号：未设置'), element('span', profile.session?.active ? 'session-active' : '', remoteBrowserEnabled() ? profile.session?.active ? '服务器浏览器运行中' : '服务器浏览器已关闭' : environment.engine !== 'managed' ? '原生会话状态需手动确认' : profile.session?.active ? '受控浏览器运行中' : '受控浏览器已关闭'));
   const ipSummary = profile.strictIp === false ? '按国家校验 · 未启用 IP 绑定' : profile.expectedIp ? `固定 IP：${profile.expectedIp}` : '严格 IP 绑定 · 首次出口检查通过并启动浏览器后绑定';
   const checkCount = profile.stats?.checkCount ?? profile.checks?.length ?? 0;
   const ipChanges = profile.stats?.ipChanges;
@@ -297,7 +368,8 @@ function renderProfile(profile) {
   const management = element('div', 'management-actions');
   management.append(actionButton('检查 / 退出其他设备', 'button button-small button-outline', () => openDevicesDialog(profile), busy), actionButton('环境诊断 ↗', 'button button-small button-quiet', (button) => launchTarget(profile, 'diagnostics', button), busy));
   if (profileLocked(profile)) management.append(actionButton('复制为新环境', 'button button-small button-quiet', () => openProfileDialog(null, { template: profile }), busy));
-  if (environment.engine === 'managed' && profile.session?.active) management.append(actionButton('关闭受控环境', 'button button-small button-quiet', (button) => profileAction(profile, button, 'close', {}, () => setOperationStatus(profile, '受控浏览器已关闭，登录会话仍保留在独立配置中。', 'success')), busy));
+  if (remoteBrowserEnabled() && profile.session?.active) management.append(actionButton('打开远程浏览器', 'button button-small button-primary', openRemoteDesktop, busy));
+  if ((environment.engine === 'managed' || remoteBrowserEnabled() && profile.session?.managed) && profile.session?.active) management.append(actionButton(remoteBrowserEnabled() ? '关闭浏览器' : '关闭受控环境', 'button button-small button-quiet', (button) => profileAction(profile, button, 'close', {}, () => setOperationStatus(profile, remoteBrowserEnabled() ? '服务器浏览器已关闭，登录会话仍保留在独立配置中。现在可以启动其他环境。' : '受控浏览器已关闭，登录会话仍保留在独立配置中。', 'success')), busy));
   card.append(management);
   card.append(element('p', 'device-review-meta', deviceReview
     ? `设备核查 ${timeLabel(deviceReview.at)} · ${deviceReview.otherSessionsSignedOut ? '已确认清理其他会话' : '其他会话待确认'} · ${deviceReview.currentSessionKept ? '已确认保留当前会话' : '当前会话待确认'}${deviceReview.note ? ` · ${deviceReview.note}` : ''}`
@@ -359,10 +431,17 @@ function checkNetwork(profile, button) {
 
 function launchTarget(profile, target, button) {
   if (!prepareNetworkAction(profile, { browser: true })) return;
-  const names = { signin: 'Google 登录页', gmail: 'Gmail', youtube: 'YouTube', terms: 'Google 服务条款页', appeal: '官方国家/地区变更申请', devices: 'Google 官方设备管理页', diagnostics: '本机环境诊断页（未执行出口国家检查）' };
-  return profileAction(profile, button, 'launch', { target }, (result) => setOperationStatus(profile,
-    result.message || `已发送打开${names[target]}的请求；尚未确认页面加载或登录状态。`, 'success'),
-  target === 'diagnostics' ? '正在启动本机独立浏览器并打开诊断页，最多等待 2 分钟…' : `正在检查代理出口及${names[target]} HTTPS 连通性，通过后才发送打开请求。线路较慢时最多等待 2 分钟…`);
+  const remote = remoteBrowserEnabled();
+  const names = { signin: 'Google 登录页', gmail: 'Gmail', youtube: 'YouTube', terms: 'Google 服务条款页', appeal: '官方国家/地区变更申请', devices: 'Google 官方设备管理页', diagnostics: `${remote ? '服务器' : '本机'}环境诊断页（未执行出口国家检查）` };
+  return profileAction(profile, button, 'launch', { target }, (result) => {
+    setOperationStatus(profile, remote
+      ? `已向服务器浏览器发送打开${names[target]}的请求。点击“打开远程浏览器”查看画面并完成操作；尚未确认 Google 登录状态。`
+      : result.message || `已发送打开${names[target]}的请求；尚未确认页面加载或登录状态。`, 'success');
+    if (remote) {
+      if ($('#devices-dialog').open) $('#devices-dialog').close();
+      openRemoteDesktop();
+    }
+  }, target === 'diagnostics' ? `正在启动${remote ? '服务器上的' : '本机'}独立浏览器并打开诊断页，最多等待 2 分钟…` : `正在检查代理出口及${names[target]} HTTPS 连通性，通过后${remote ? '在服务器上打开浏览器' : '发送打开请求'}。线路较慢时最多等待 2 分钟…`);
 }
 
 function startCycle(profile, button) {
@@ -391,8 +470,8 @@ function openProfileDialog(profile = null, defaults = {}) {
   $('#clear-proxy-auth').checked = false;
   $('#proxy-auth-help').textContent = defaults.template && values.proxyAuthConfigured
     ? '代理用户名已复制；请重新填写密码。原环境的密码不会复制到此表单。'
-    : profile?.proxyAuthConfigured ? '由当前 Windows 用户加密保存。用户名与地址不变时，密码留空保留原密码；不会放入浏览器命令行或导出记录。'
-      : '填写代理商提供的凭据，不是 Google 密码。由当前 Windows 用户加密保存，不会放入浏览器命令行或导出记录。';
+    : profile?.proxyAuthConfigured ? `${remoteBrowserEnabled() ? '凭据保存在服务器上。' : '由当前 Windows 用户加密保存。'}用户名与地址不变时，密码留空保留原密码；不会放入浏览器命令行或导出记录。`
+      : `填写代理商提供的凭据，不是 Google 密码。${remoteBrowserEnabled() ? '凭据保存在服务器上，' : '由当前 Windows 用户加密保存，'}不会放入浏览器命令行或导出记录。`;
   resetProxyDiagnosis();
   $('#profile-strict-ip').checked = values.strictIp !== false;
   const environment = values.environment || {};
@@ -407,13 +486,13 @@ function openProfileDialog(profile = null, defaults = {}) {
   const isBound = profileLocked(profile);
   ['profile-country', 'profile-proxy', 'proxy-username', 'proxy-password', 'clear-proxy-auth', 'profile-strict-ip', 'environment-engine', 'environment-locale', 'environment-timezone', 'environment-width', 'environment-height', 'environment-color'].forEach((id) => { document.getElementById(id).disabled = isBound; });
   $('#profile-binding-note').textContent = isBound
-    ? `这个环境已启动过浏览器，国家、代理、IP 绑定选项和浏览器设置已固定。${profile?.session?.active ? '关闭受控浏览器后可修改账号代号。' : '仍可修改名称与账号代号。'}需要更换设置时请新建环境。`
+    ? `这个环境已启动过浏览器，国家、代理、IP 绑定选项和浏览器设置已固定。${profile?.session?.active ? '关闭浏览器后可修改账号代号。' : '仍可修改名称与账号代号。'}需要更换设置时请新建环境。`
     : '首次打开浏览器（包括环境诊断）后，国家、代理与浏览器设置固定。严格 IP 绑定会在首次出口检查通过并启动浏览器后记录出口。';
   updateEngineHelp();
   $('#profile-form-error').hidden = true;
   $('#profile-next-step').textContent = defaults.message || (defaults.template
     ? '已复制配置供你修改。创建后使用全新的浏览器目录；原环境的登录会话、观察记录和已绑定 IP 不会复制。'
-    : '保存后回到环境卡片，点击“登录 Google 账号”。程序会检查代理出口并打开独立浏览器，由你完成登录。');
+    : remoteBrowserEnabled() ? '保存后回到环境卡片，点击“登录 Google 账号”。程序会检查代理出口并启动服务器浏览器，在远程画面中由你完成登录。' : '保存后回到环境卡片，点击“登录 Google 账号”。程序会检查代理出口并打开独立浏览器，由你完成登录。');
   $('#profile-dialog').showModal();
   (defaults.focusProxy ? $('#profile-proxy') : $('#profile-label')).focus();
 }
@@ -421,7 +500,7 @@ function openProfileDialog(profile = null, defaults = {}) {
 function updateEngineHelp() {
   $('#environment-engine-help').textContent = $('#environment-engine').value === 'managed'
     ? '受控模式应用语言、时区、视口和外观，可由工作台关闭。使用 Playwright 启动，Google 可能限制此类浏览器登录；请先评估兼容性。'
-    : '兼容模式请求浏览器语言和窗口大小；实际效果以诊断页为准。时区仅用于对照，需在操作系统或当地远程电脑配置；外观跟随原生浏览器行为。';
+    : remoteBrowserEnabled() ? '浏览器在服务器上运行，通过远程画面操作，并可由工作台关闭。每个环境保留独立的登录目录；实际语言、时区和窗口效果以环境诊断页为准。' : '兼容模式请求浏览器语言和窗口大小；实际效果以诊断页为准。时区仅用于对照，需在操作系统或当地远程电脑配置；外观跟随原生浏览器行为。';
 }
 
 function openDevicesDialog(profile) {
@@ -934,9 +1013,26 @@ async function saveForm({ event, form, button, errorElement, dialog, path, metho
   }
 }
 
+$('#remote-logout').addEventListener('click', async () => {
+  if (!remoteBrowserEnabled()) return;
+  try {
+    const response = await fetch('/logout', {method:'POST', redirect:'follow'});
+    if (!response.ok) throw new Error('退出工作台失败，请稍后重试。');
+    closeRemoteDesktop();
+    window.location.assign('/login');
+  } catch (error) { toast(error.message, 'error'); }
+});
 $('#new-profile').addEventListener('click', () => openProfileDialog());
 $('#refresh').addEventListener('click', () => loadState().catch(() => {}));
 $('#environment-engine').addEventListener('change', updateEngineHelp);
+$('#open-remote-desktop').addEventListener('click', (event) => {
+  event.preventDefault();
+  openRemoteDesktop();
+});
+$('#hide-remote-desktop').addEventListener('click', () => {
+  closeRemoteDesktop();
+  $('#open-remote-desktop').focus();
+});
 function updateCountryDefaults() {
   if (editingProfileId) return;
   const defaults = environmentDefaults[$('#profile-country').value.toUpperCase()];
@@ -1011,7 +1107,7 @@ $('#profile-form').addEventListener('submit', (event) => saveForm({
   onSaved: (profile) => {
     if (!profile?.id) return;
     setOperationStatus(profile, profile.proxy
-      ? '配置已保存。下一步：点击“登录 Google 账号”。会先验证出口国家，再打开本机独立浏览器。也可先点击“检查网络”。'
+      ? remoteBrowserEnabled() ? '配置已保存。下一步：点击“登录 Google 账号”。会先验证出口国家，再启动服务器浏览器，通过远程画面完成登录。也可先点击“检查网络”。' : '配置已保存。下一步：点击“登录 Google 账号”。会先验证出口国家，再打开本机独立浏览器。也可先点击“检查网络”。'
       : '环境已保存，尚未配置代理。点击“登录 Google 账号”填写出口地址后即可继续。', profile.proxy ? 'success' : 'warning');
     document.getElementById(`profile-${profile.id}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
   }

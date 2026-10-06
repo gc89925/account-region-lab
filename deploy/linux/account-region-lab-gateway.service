@@ -1,0 +1,30 @@
+[Unit]
+Description=Account Region Lab authenticated web and desktop gateway
+After=account-region-lab.service
+Requires=account-region-lab.service
+PartOf=account-region-lab.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=exec
+User=regionlab
+Group=regionlab
+WorkingDirectory=/opt/account-region-lab/app
+EnvironmentFile=/etc/account-region-lab.env
+Environment=HOME=/var/lib/account-region-lab
+Environment=PATH=/opt/account-region-lab/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=GATEWAY_PORT=4318
+Environment=REGION_LAB_ACCESS_FILE=/var/lib/account-region-lab/access.json
+UMask=0077
+ExecStart=/opt/account-region-lab/node/bin/node /opt/account-region-lab/app/lib/remote-gateway.js
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=15
+KillMode=control-group
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

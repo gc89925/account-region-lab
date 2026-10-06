@@ -54,6 +54,7 @@ test('curl SOCKS errors distinguish authentication, protocol mismatch and target
     ['cannot complete SOCKS5 connection to secret.invalid. (3)', 'socks_network_unreachable', 'target_connect'],
     ['cannot complete SOCKS5 connection to secret.invalid. (4)', 'socks_host_unreachable', 'target_connect'],
     ['cannot complete SOCKS5 connection to secret.invalid. (5)', 'socks_target_refused', 'target_connect'],
+    ["Can't complete SOCKS5 connection to secret.invalid. (5)", 'socks_target_refused', 'target_connect'],
     ['Failed to resolve "secret.invalid" for SOCKS5 connect.', 'target_dns_failed', 'target_dns'],
   ];
   for (const [stderr, code, stage] of cases) {
@@ -85,6 +86,26 @@ test('a blocked geo provider falls back through the same proxy to a second HTTPS
     assert.equal(options.env.ALL_PROXY, '');
     assert.ok(!args.includes('--insecure'));
   }
+});
+
+test('curl 8.5 target rejection preserves the SOCKS reply and never triggers an HTTP protocol retry', async () => {
+  const calls = [];
+  const runCurl = async (_command, args) => {
+    calls.push({ proxy: args[args.indexOf('--proxy') + 1], target: args.at(-1) });
+    throw { code: 97, stderr: "curl: (97) Can't complete SOCKS5 connection to private.invalid. (5)\nprivate-password=secret" };
+  };
+  const result = await diagnoseProxy('socks5://127.0.0.1:1080', { runCurl });
+  assert.equal(result.error.code, 'socks_target_refused');
+  assert.equal(result.error.stage, 'target_connect');
+  assert.equal(result.error.socksReply, 5);
+  assert.equal(result.error.retryable, true);
+  assert.equal(result.alternateProtocol, undefined);
+  assert.ok(!JSON.stringify(result).includes('private'));
+  assert.ok(!JSON.stringify(result).includes('secret'));
+  assert.deepEqual(calls, [
+    { proxy: 'socks5h://127.0.0.1:1080', target: 'https://api.country.is/' },
+    { proxy: 'socks5h://127.0.0.1:1080', target: 'https://ipwho.is/' },
+  ]);
 });
 
 test('invalid geo data cannot become a passed probe and fallback does not hide auth failure', async () => {

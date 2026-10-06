@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.0 — 2026-10-06
+
+- Run persistent native Chrome on a Linux server and operate it through an embedded noVNC desktop. One active environment at a time, with explicit close and preserved account directories.
+- Add an authenticated HTTP/WebSocket gateway, HTTPS-origin checks, secure session cookies, login rate limits and logout; keep all internal services on loopback.
+- Save Linux SOCKS credentials using an installation-specific AES-256-GCM key; retain Windows DPAPI behavior.
+- Provide non-root systemd deployment templates and private X authority, without disabling Chrome's sandbox.
+- Recognize both current and curl 8.5 SOCKS target-rejection wording without mislabeling it as a password or protocol failure.
+
 ## 0.3.2 — 2026-10-06
 
 - Require a GET connectivity check of the selected Google destination, through the same proxy, before every external browser launch. Matching exit country alone is insufficient.

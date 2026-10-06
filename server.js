@@ -11,9 +11,10 @@ import { createCatalog } from './lib/catalog.js';
 import { createPublicProxyCatalog } from './lib/public-proxies.js';
 import { createCredentialVault, validateProxyAuth } from './lib/proxy-auth.js';
 import { createSocksBridge } from './lib/socks-bridge.js';
+import { createRemoteLauncher } from './lib/remote-browser.js';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
-const VERSION = '0.3.2';
+const VERSION = '0.4.0';
 
 function respond(res, status, data) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -36,11 +37,17 @@ async function readBody(req) {
   } catch { throw new Error('请求 JSON 无效。'); }
 }
 
-export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || defaultDataDir(), probe = probeProxy, google = probeGoogle, destinationProbe = probeDestination, diagnose = diagnoseProxy, launch = launchBrowser, browser = detectBrowser(), managed = createManagedLauncher(), catalog = createCatalog(), publicProxies = createPublicProxyCatalog(), vault = createCredentialVault(), createBridge = createSocksBridge } = {}) {
+export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || defaultDataDir(), probe = probeProxy, google = probeGoogle, destinationProbe = probeDestination, diagnose = diagnoseProxy, launch = launchBrowser, browser = detectBrowser(), managed = createManagedLauncher(), catalog = createCatalog(), publicProxies = createPublicProxyCatalog(), vault, createBridge = createSocksBridge, remoteMode = process.env.REGION_LAB_REMOTE === '1', publicOrigin = process.env.REGION_LAB_PUBLIC_ORIGIN || '', remote = createRemoteLauncher() } = {}) {
   dataDir = resolve(dataDir);
+  if (remoteMode) {
+    let parsed;
+    try { parsed = new URL(publicOrigin); } catch { throw new Error('服务器模式需要配置 HTTPS 公共访问地址。'); }
+    if (parsed.protocol !== 'https:' || parsed.origin !== publicOrigin || parsed.username || parsed.password) throw new Error('服务器模式需要不含路径的 HTTPS 公共访问地址。');
+  }
   const workspaceId = createHash('sha256').update(process.platform === 'win32' ? dataDir.toLowerCase() : dataDir).digest('hex').slice(0,24);
   const instanceId = randomBytes(12).toString('hex');
   const release = acquireLock(dataDir);
+  vault ||= createCredentialVault(remoteMode ? {keyPath:join(dataDir, 'proxy-vault.key')} : {});
   const file = join(dataDir, 'state.json');
   let state;
   try {
@@ -65,12 +72,13 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
   const bridgeStarts = new Map();
   let diagnosticsActive = 0;
   const save = () => atomicSave(file, state);
-  const displayProfile = p => { const { proxyAuth, ...visible } = withStats(p); return ({ ...visible, proxyAuthConfigured: !!proxyAuth, locked: p.launches.length > 0, session: { active: managed.isActive(p.id), managed: p.environment.engine === 'managed' }, network: {
+  const sessionActive = id => remoteMode ? remote.isActive(id) : managed.isActive(id);
+  const displayProfile = p => { const { proxyAuth, ...visible } = withStats(p); return ({ ...visible, proxyAuthConfigured: !!proxyAuth, locked: p.launches.length > 0, session: { active: sessionActive(p.id), managed: remoteMode || p.environment.engine === 'managed' }, network: {
     checkCount: p.checks.length,
     uniqueIps: new Set(p.checks.filter(c => c.ip).map(c => c.ip)).size,
     lastCheckedAt: p.checks.at(-1)?.at || null,
   } }); };
-  const snapshot = () => ({ version: VERSION, profiles: state.profiles.map(displayProfile), browser, token, links: LINKS, capabilities: { managed: true, devices: 'manual-review', catalog: 'VPN Gate metadata only' } });
+  const snapshot = () => ({ version: VERSION, profiles: state.profiles.map(displayProfile), browser, token, links: LINKS, ...(remoteMode ? {remoteDesktopUrl:'/desktop/vnc.html?autoconnect=true&resize=scale&path=desktop/websockify'} : {}), capabilities: { remoteBrowser:remoteMode, managed: !remoteMode, devices: 'manual-review', catalog: 'VPN Gate metadata only' } });
 
   async function readAuth(body, profile, proxy) {
     if (body.clearProxyAuth === true) return null;
@@ -155,10 +163,12 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('X-Frame-Options', 'DENY');
-    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     const port = server.address()?.port;
     const hosts = [`127.0.0.1:${port}`, `localhost:${port}`];
-    if (!hosts.includes(req.headers.host) || (req.headers.origin && !hosts.map(h => `http://${h}`).includes(req.headers.origin)) || req.headers['sec-fetch-site'] === 'cross-site') {
+    const origins = hosts.map(h => `http://${h}`);
+    if (remoteMode) { hosts.push(new URL(publicOrigin).host); origins.push(publicOrigin); }
+    if (!hosts.includes(req.headers.host) || (req.headers.origin && !origins.includes(req.headers.origin)) || req.headers['sec-fetch-site'] === 'cross-site') {
       return respond(res, 403, { error: '仅允许本机同源访问。' });
     }
     let lockedId, lockedAccount;
@@ -229,7 +239,7 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
           const updated = profileInput({ ...profile, ...body });
           const authentication = await saveAuth(body, profile, updated.proxy);
           const authChanged = JSON.stringify(authentication.proxyAuth) !== JSON.stringify(profile.proxyAuth || null);
-          if (updated.accountLabel !== profile.accountLabel && managed.isActive(profile.id)) throw new Error('请先关闭受控环境，再修改账号代号。');
+          if (updated.accountLabel !== profile.accountLabel && sessionActive(profile.id)) throw new Error('请先关闭环境浏览器，再修改账号代号。');
           if (authChanged || updated.proxy !== profile.proxy || updated.country !== profile.country || JSON.stringify(updated.environment) !== JSON.stringify(profile.environment) || updated.strictIp !== profile.strictIp) {
             // Do not retarget a profile that might still be running with its previous proxy.
             if (profile.launches.length) throw new Error('使用过的环境已固定网络和环境参数。请新建环境，避免旧浏览器继续使用原配置。名称仍可修改。');
@@ -242,18 +252,19 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
         if (req.method !== 'POST') return respond(res, 405, { error: '请求方法不支持。' });
         if (match[2] === 'check') return respond(res, 200, await check(profile));
         if (match[2] === 'close') {
-          if (profile.environment.engine !== 'managed') throw new Error('原生模式请直接关闭对应浏览器窗口。本工具不能可靠追踪原生会话。');
-          const closed = await managed.close(profile.id);
+          if (!remoteMode && profile.environment.engine !== 'managed') throw new Error('原生模式请直接关闭对应浏览器窗口。本工具不能可靠追踪原生会话。');
+          const closed = await (remoteMode ? remote : managed).close(profile.id);
           if (closed?.ok === false) throw new Error('受控环境未能关闭，请手动关闭该环境窗口并刷新状态。');
-          return respond(res, 200, { ok: true, message: '受控环境已关闭。Google 在其他设备上的登录不受此操作影响。' });
+          return respond(res, 200, { ok: true, message: '环境浏览器已关闭，登录目录保留。Google 在其他设备上的登录不受此操作影响。' });
         }
         if (match[2] === 'launch') {
           const destination = targetUrl(profile, body.target);
           if (!browser) throw new Error('未检测到 Chrome 或 Edge，请安装浏览器或设置 BROWSER_PATH。');
           if (!profile.proxy) throw new Error('请先设置代理，再打开该环境。诊断页不访问外网，但会固定该环境的网络设置。');
+          if (remoteMode && state.profiles.some(p => p.id !== profile.id && (sessionActive(p.id) || busy.has(p.id)))) throw new Error('这台服务器一次运行一个账号浏览器，请先关闭当前环境。');
           const accountKey = profile.accountLabel.toLowerCase();
           if (accountKey) {
-            if (accountBusy.has(accountKey) || state.profiles.some(p => p.id !== profile.id && p.accountLabel.toLowerCase() === accountKey && managed.isActive(p.id))) throw new Error('同一账号代号已有受控环境运行或启动中。请先关闭它。此限制只覆盖本工具的受控环境。');
+            if (accountBusy.has(accountKey) || state.profiles.some(p => p.id !== profile.id && p.accountLabel.toLowerCase() === accountKey && sessionActive(p.id))) throw new Error('同一账号代号已有受控环境运行或启动中。请先关闭它。此限制只覆盖本工具的受控环境。');
             accountBusy.add(accountKey); lockedAccount = accountKey;
           }
           let result;
@@ -266,7 +277,9 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
           let opening;
           const { proxyAuth: _secret, proxyUsername: _username, ...launchProfile } = profile;
           launchProfile.proxy = (await connection(profile)).proxy;
-          if (profile.environment.engine === 'managed') {
+          if (remoteMode) {
+            opening = await remote.open({ profile: launchProfile, profileDir, browserPath: browser.path, url: destination });
+          } else if (profile.environment.engine === 'managed') {
             opening = await managed.open({ profile: launchProfile, profileDir, browserPath: browser.path, url: destination });
           } else {
             const args = buildBrowserArgs(launchProfile, profileDir, body.target);
@@ -282,7 +295,7 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
           profile.launches = profile.launches.slice(-500);
           save();
           if (opening?.ok === false) throw new Error('浏览器已启动，但目标页面未加载成功。环境设置已固定；可关闭受控环境后检查线路重试。');
-          return respond(res, 200, { ok: true, message: `${result ? '启动前的出口与 Google 目标页面连通检查已通过。' : '已请求打开本机诊断页，未检查外网连接。'}已向本机独立浏览器窗口发送打开请求，请切换到 ${browser.name} 查看。此检查不保证页面持续可用，本工具尚未确认登录状态。`, profile: displayProfile(profile) });
+          return respond(res, 200, { ok: true, message: `${result ? '启动前的出口与 Google 目标页面连通检查已通过。' : '已请求打开诊断页，未检查外网连接。'}${remoteMode ? '已在服务器打开浏览器，请在远程浏览器画面中操作。' : `已向本机独立浏览器窗口发送打开请求，请切换到 ${browser.name} 查看。`}此检查不保证页面持续可用，本工具尚未确认登录状态。`, profile: displayProfile(profile) });
         }
         if (match[2] === 'device-review') {
           if (typeof body.otherSessionsSignedOut !== 'boolean' || typeof body.currentSessionKept !== 'boolean') throw new Error('请明确填写设备核查结果。');
@@ -328,6 +341,7 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
   let closing;
   const close = () => closing ||= (async () => {
     publicProxies.cancelScan?.();
+    await remote.closeAll();
     await managed.closeAll();
     await Promise.allSettled([...bridgeStarts.values()]);
     await Promise.all([...bridges.values()].map(bridge => bridge.close()));

@@ -22,7 +22,7 @@
         <a href="#catalog">公共节点</a>
         <a href="#method">使用说明</a>
       </nav>
-      <span class="local-badge"><span></span>仅在本机运行</span>
+      <div class="header-tools"><a id="open-remote-desktop" class="button button-small button-primary" href="#remote-browser" aria-controls="remote-browser" aria-expanded="false" hidden>打开远程浏览器</a><button id="remote-logout" class="button button-small button-quiet" type="button" hidden>退出工作台</button><span class="local-badge"><span></span><span id="runtime-location">仅在本机运行</span></span></div>
     </header>
 
     <main id="main" class="workspace">
@@ -30,7 +30,7 @@
         <div class="hero-copy">
           <p class="eyebrow">YOUR ACCOUNTS. THEIR OWN SPACE.</p>
           <h1 id="page-title">每个账号，<br>一个独立环境<span>。</span></h1>
-          <p class="hero-description">先配置账号专属代理，再点击环境卡片中的“登录 Google 账号”。<br>登录页会打开在本机独立 Chrome / Edge 窗口，请到任务栏切换。</p>
+          <p id="hero-description" class="hero-description">先配置账号专属代理，再点击环境卡片中的“登录 Google 账号”。<br>登录页会打开在本机独立 Chrome / Edge 窗口，请到任务栏切换。</p>
           <div class="hero-actions">
             <button id="new-profile" class="button button-primary" type="button"><span aria-hidden="true">＋</span> 新建环境</button>
             <a class="button button-quiet" href="#catalog">没有代理？查找免费节点 <span aria-hidden="true">↓</span></a>
@@ -51,12 +51,18 @@
         <div class="overview-stat"><span class="stat-label">独立环境</span><strong id="stat-profiles">—</strong><span id="stat-configured" class="stat-description">等待加载</span></div>
         <div class="overview-stat"><span class="stat-label">出口符合目标</span><strong id="stat-healthy">—</strong><span class="stat-description">仅依据最近一次网络检查</span></div>
         <div class="overview-stat"><span class="stat-label">待复查</span><strong id="stat-reviews">—</strong><span class="stat-description">已满七天的观察周期</span></div>
-        <div class="browser-stat"><span class="browser-icon" aria-hidden="true">◎</span><div><span class="stat-label">本机浏览器</span><strong id="browser-name">正在检测…</strong><span id="browser-hint" class="stat-description">使用独立配置目录打开</span></div></div>
+        <div class="browser-stat"><span class="browser-icon" aria-hidden="true">◎</span><div><span id="browser-location-label" class="stat-label">本机浏览器</span><strong id="browser-name">正在检测…</strong><span id="browser-hint" class="stat-description">使用独立配置目录打开</span></div></div>
+      </section>
+
+      <section id="remote-browser" class="section-block remote-browser-panel" aria-labelledby="remote-browser-title" hidden>
+        <div class="section-heading"><div><p class="eyebrow">REMOTE BROWSER</p><h2 id="remote-browser-title">远程浏览器</h2><p id="remote-browser-context">在这里操作服务器上的浏览器，完成 Google 登录。</p></div><div class="remote-browser-actions"><a id="remote-desktop-tab" class="button button-small button-outline" target="_blank" rel="noopener noreferrer">独立标签页 ↗</a><button id="hide-remote-desktop" class="button button-small button-outline" type="button">收起画面</button></div></div>
+        <p class="remote-browser-note">同一时间只运行一个账号环境。切换账号时，先在当前环境卡片关闭浏览器；收起画面仅断开画面连接，浏览器继续运行。</p>
+        <div id="remote-desktop-frame-container" class="remote-desktop-frame-container"></div>
       </section>
 
       <section id="environments" class="section-block" aria-labelledby="environments-title">
         <div class="section-heading"><div><p class="eyebrow">01 / ENVIRONMENTS</p><h2 id="environments-title">独立环境</h2></div><button id="refresh" class="button button-small button-outline" type="button"><span aria-hidden="true">↻</span> 刷新状态</button></div>
-        <div class="getting-started"><strong>从这里登录 Google</strong><span>① 编辑代理地址</span><span>② 点击“登录 Google 账号”</span><span>③ 到本机浏览器窗口登录</span><p>本页管理环境；邮箱、密码和验证码均在 Google 官方页面输入。</p></div>
+        <div class="getting-started"><strong>从这里登录 Google</strong><span>① 编辑代理地址</span><span>② 点击“登录 Google 账号”</span><span id="signin-step-location">③ 到本机浏览器窗口登录</span><p>本页管理环境；邮箱、密码和验证码均在 Google 官方页面输入。</p></div>
         <div id="profile-grid" class="profile-grid" aria-live="polite"><div class="empty-state loading-state">正在读取本机环境…</div></div>
         <p class="section-footnote"><span aria-hidden="true">↳</span> 每个环境有独立的浏览器配置与会话；它不是虚拟机，也不能保证改变账号关联地区。</p>
       </section>
@@ -86,11 +92,11 @@
         <div class="method-intro"><p class="eyebrow">04 / HOW IT WORKS</p><h2 id="method-title">分开使用，<br>如实观察。</h2><p>这个工作台帮助你管理环境与证据。<br>地区判断和申诉结果由 Google 决定。</p></div>
         <ol class="method-steps">
           <li><span>01</span><div><h3>配置每个环境的网络</h3><p>有代理时填写 HTTP / SOCKS5 地址，先点击“诊断代理”检查协议与出口。没有线路时使用“自动筛选可用节点”，检测通过后创建环境。公开目录不保证可用性或住宅属性，浏览器启动前会再次检查出口。</p></div></li>
-          <li><span>02</span><div><h3>登录，核查设备，再正常使用</h3><p>点击对应环境的“登录 Google 账号”，程序检查出口后启动本机独立 Chrome / Edge。到任务栏切换到新窗口，自己完成登录，再回到这里打开 Gmail 或 YouTube。使用“检查 / 退出其他设备”进入 Google 官方页面逐项管理会话。</p></div></li>
+          <li><span>02</span><div><h3>登录，核查设备，再正常使用</h3><p id="method-signin-description">点击对应环境的“登录 Google 账号”，程序检查出口后启动本机独立 Chrome / Edge。到任务栏切换到新窗口，自己完成登录，再回到这里打开 Gmail 或 YouTube。使用“检查 / 退出其他设备”进入 Google 官方页面逐项管理会话。</p></div></li>
           <li><span>03</span><div><h3>记录条款页，按周期复查</h3><p>记录登录后条款页显示的地区。必要时在同一环境打开官方变更申请，按实际情况填写。</p><a id="faq-link" class="text-link" target="_blank" rel="noopener noreferrer" hidden>Google 官方国家/地区说明 <span aria-hidden="true">↗</span></a></div></li>
         </ol>
       </section>
-      <footer class="site-footer"><span>ACCOUNT REGION LAB <span id="app-version"></span></span><a href="https://github.com/gc89925/account-region-lab" target="_blank" rel="noopener noreferrer">GitHub 项目 ↗</a><span>本机配置 · 人工观察 · 数据可导出</span></footer>
+      <footer class="site-footer"><span>ACCOUNT REGION LAB <span id="app-version"></span></span><a href="https://github.com/gc89925/account-region-lab" target="_blank" rel="noopener noreferrer">GitHub 项目 ↗</a><span id="runtime-footer">本机配置 · 人工观察 · 数据可导出</span></footer>
     </main>
 
     <dialog id="profile-dialog" class="modal" aria-labelledby="profile-dialog-title">
@@ -98,7 +104,7 @@
         <div class="modal-heading"><div><p class="eyebrow">ENVIRONMENT SETTINGS</p><h2 id="profile-dialog-title">新建环境</h2></div><button class="icon-button" type="button" data-close="profile-dialog" aria-label="关闭环境设置">×</button></div>
         <p id="profile-next-step" class="modal-intro"></p>
         <label for="profile-label">环境名称</label><input id="profile-label" name="label" required maxlength="80" placeholder="例如：印度 · 工作账号" autocomplete="off">
-        <label for="profile-account">账号代号 <span class="field-optional">可选，仅保存在本机</span></label><input id="profile-account" name="accountLabel" maxlength="80" placeholder="例如：work-in-01，无需填写邮箱" autocomplete="off"><p class="field-help">相同代号用于避免在本应用中同时启动多个受控环境；不会读取登录身份，也不管理外部设备。</p>
+        <label for="profile-account">账号代号 <span id="account-storage-hint" class="field-optional">可选，仅保存在本机</span></label><input id="profile-account" name="accountLabel" maxlength="80" placeholder="例如：work-in-01，无需填写邮箱" autocomplete="off"><p class="field-help">相同代号用于避免在本应用中同时启动多个受控环境；不会读取登录身份，也不管理外部设备。</p>
         <label for="profile-country">目标国家/地区 <span class="field-optional">两位国家代码</span></label><input id="profile-country" name="country" required pattern="[A-Za-z]{2}" maxlength="2" list="country-options" placeholder="US" autocomplete="off" class="country-input" aria-describedby="country-help"><p id="country-help" class="field-help">美国 US · 日本 JP · 韩国 KR · 印度 IN · 尼日利亚 NG</p>
         <label for="profile-proxy">代理地址 <span class="field-optional">可稍后配置</span></label><input id="profile-proxy" name="proxy" maxlength="4096" placeholder="socks5://用户名:密码@主机:端口" autocomplete="off" spellcheck="false" aria-describedby="proxy-help proxy-import-status"><p id="proxy-help" class="field-help">可直接粘贴完整 SOCKS5 认证链接，自动拆分地址、用户名和密码。也支持不含认证的 http://主机:端口 或 socks5://主机:端口。</p>
         <div class="field-grid proxy-auth-fields"><div><label for="proxy-username">代理用户名 <span class="field-optional">可选</span></label><input id="proxy-username" maxlength="255" autocomplete="off" spellcheck="false"></div><div><label for="proxy-password">代理密码 <span class="field-optional">可选</span></label><input id="proxy-password" type="password" maxlength="255" autocomplete="new-password"></div></div>
