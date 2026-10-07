@@ -21,6 +21,7 @@ Open `http://127.0.0.1:4317`. The interface is currently Chinese. India and Nige
 
 - Paste a full authenticated SOCKS5 URI into the proxy field to split the endpoint and decoded credentials automatically. Passwords stay in the masked password field. Clicking outside a settings dialog keeps it open and preserves the draft.
 - Independent persistent browser directories and per-profile proxies.
+- Server mode supports up to five simultaneous environments, each with a private display, native Chrome process and proxy. Open each viewer in a separate tab, or switch the embedded viewer without stopping other environments. The configured ceiling is not a guarantee that a small server can sustain five heavy pages.
 - Actionable authentication/protocol/target diagnostics and explicitly applied protocol suggestions, with no direct-network fallback.
 - Public-proxy batches of up to 30 candidates, at most three concurrent checks, progress/cancellation, and a default view of country/Google checks passed within two minutes. No verified residential IP supply is promised.
 - Country checks and a GET request to the exact selected Google destination through the same proxy before each external launch; a matching country alone does not allow launch. The request does not follow redirects and 2xx/3xx only proves point-in-time URL reachability. Optional strict IP pinning blocks a changed IP even in the same country. This is not continuous network enforcement or proof of a rendered page/sign-in.

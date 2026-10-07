@@ -30,13 +30,14 @@ async function fixture(t, overrides = {}) {
     browser: { name: 'Test remote browser', path: '/test/chromium' },
     remote: {
       isActive: id => active.has(id),
+      getDesktop: id => active.has(id) && !control.desktopUnavailable ? {port:6101 + [...active].indexOf(id), generation:id.replaceAll('-','')} : null,
       async open(options) {
         calls.remote.push(structuredClone(options));
         if (control.openError) throw control.openError;
         active.add(options.profile.id);
         return { ok: true, active: true, pid: 1234 };
       },
-      async close(id) { calls.remoteClose.push(id); active.delete(id); return { ok: true }; },
+      async close(id) { calls.remoteClose.push(id); if (control.closeFails) return {ok:false}; active.delete(id); return { ok: true }; },
       async closeAll() { calls.remoteCloseAll++; active.clear(); },
     },
     managed: {
@@ -107,15 +108,17 @@ async function fixture(t, overrides = {}) {
   return { dataDir, origin, calls, control, active, request, post, state, create, close: () => lab.close() };
 }
 
-test('remote snapshot advertises its same-origin desktop and native sessions are managed by the server', async t => {
+test('remote snapshot advertises per-profile desktops and capacity', async t => {
   const app = await fixture(t);
   const profile = await app.create();
   const snapshot = await app.state();
   assert.equal(snapshot.capabilities.remoteBrowser, true);
   assert.equal(snapshot.capabilities.managed, false);
-  assert.equal(snapshot.remoteDesktopUrl, '/desktop/vnc.html?autoconnect=true&resize=scale&path=desktop/websockify');
+  assert.equal(snapshot.remoteDesktopUrl, undefined);
+  assert.equal(snapshot.capabilities.maxRemoteEnvironments,5);
+  assert.deepEqual(snapshot.remoteSessions,{limit:5,active:0,starting:0});
   assert.equal(snapshot.profiles.find(p => p.id === profile.id).environment.engine, 'native');
-  assert.deepEqual(snapshot.profiles.find(p => p.id === profile.id).session, { active: false, managed: true });
+  assert.deepEqual(snapshot.profiles.find(p => p.id === profile.id).session, { active: false, managed: true, starting:false, desktopUrl:null });
   const page = await app.request('/');
   assert.match(page.headers.get('content-security-policy'), /frame-src 'self'/);
 });
@@ -156,43 +159,84 @@ test('remote launches use the remote launcher for both engines and reuse the sam
   assert.equal(app.active.size, 0);
 });
 
-test('a running remote environment blocks a different account before probing and allows switching after close', async t => {
+test('five different environments remain active and closing one frees only its slot', async t => {
   const app = await fixture(t);
-  const first = await app.create({ label: 'First account', accountLabel: 'first' });
-  const second = await app.create({ label: 'Second account', accountLabel: 'second' });
-  assert.equal((await app.post(`/api/profiles/${first.id}/launch`, { target: 'signin' })).status, 200);
+  const profiles = [];
+  for (let i=0;i<6;i++) profiles.push(await app.create({label:`Account ${i}`,accountLabel:`account-${i}`}));
+  for (const profile of profiles.slice(0,5)) assert.equal((await app.post(`/api/profiles/${profile.id}/launch`,{target:'signin'})).status,200);
+  const snapshot = await app.state();
+  assert.deepEqual(snapshot.remoteSessions,{limit:5,active:5,starting:0});
+  const urls = snapshot.profiles.filter(p => p.session.active).map(p => p.session.desktopUrl);
+  assert.equal(new Set(urls).size,5);
+  for (let i=0;i<5;i++) assert.ok(urls[i].startsWith(`/desktop/${profiles[i].id}/${profiles[i].id.replaceAll('-','')}/`));
   const probeCount = app.calls.probes.length;
-  const blocked = await app.post(`/api/profiles/${second.id}/launch`, { target: 'gmail' });
+  const blocked = await app.post(`/api/profiles/${profiles[5].id}/launch`, { target: 'gmail' });
   assert.equal(blocked.status, 400, blocked.raw);
-  assert.match(blocked.value.error, /一次运行一个账号浏览器/);
+  assert.match(blocked.value.error, /最多同时运行 5 个环境/);
   assert.equal(app.calls.probes.length, probeCount);
-  assert.equal(app.calls.remote.length, 1);
-  assert.deepEqual((await app.state()).profiles.find(p => p.id === second.id).launches, []);
-  assert.equal((await app.post(`/api/profiles/${first.id}/close`)).status, 200);
-  assert.equal((await app.post(`/api/profiles/${second.id}/launch`, { target: 'signin' })).status, 200);
-  assert.deepEqual([...app.active], [second.id]);
+  assert.equal(app.calls.remote.length, 5);
+  // A new tab in an existing environment is allowed at full capacity.
+  assert.equal((await app.post(`/api/profiles/${profiles[1].id}/launch`,{target:'gmail'})).status,200);
+  assert.equal((await app.post(`/api/profiles/${profiles[0].id}/close`)).status, 200);
+  assert.deepEqual([...app.active],profiles.slice(1,5).map(p => p.id));
+  assert.equal((await app.post(`/api/profiles/${profiles[5].id}/launch`, { target: 'signin' })).status, 200);
+  assert.deepEqual([...app.active],profiles.slice(1).map(p => p.id));
 });
 
-test('an in-flight launch prevents another remote account from racing into the shared desktop', async t => {
-  let releaseProbe;
-  let reachedProbe;
-  const reached = new Promise(resolve => { reachedProbe = resolve; });
-  const app = await fixture(t, { probe: async () => {
-    reachedProbe();
-    await new Promise(resolve => { releaseProbe = resolve; });
+test('in-flight launches reserve capacity and cannot race past the limit', async t => {
+  let releaseProbe, reachedProbe, started=0;
+  const gate = new Promise(resolve => { releaseProbe=resolve; });
+  const reached = new Promise(resolve => { reachedProbe=resolve; });
+  const app = await fixture(t, { maxRemoteEnvironments:3, probe: async () => {
+    if (++started === 3) reachedProbe();
+    await gate;
     return { ip: '203.0.113.42', country: 'IN' };
   } });
-  const first = await app.create({ label: 'Pending account' });
-  const second = await app.create({ label: 'Competing account' });
-  const pending = app.post(`/api/profiles/${first.id}/launch`, { target: 'signin' });
+  const profiles=[];
+  for (let i=0;i<4;i++) profiles.push(await app.create({label:`Pending ${i}`}));
+  const pending=profiles.slice(0,3).map(p => app.post(`/api/profiles/${p.id}/launch`,{target:'signin'}));
   await reached;
   let blocked;
-  try { blocked = await app.post(`/api/profiles/${second.id}/launch`, { target: 'signin' }); }
+  try {
+    assert.deepEqual((await app.state()).remoteSessions,{limit:3,active:0,starting:3});
+    blocked = await app.post(`/api/profiles/${profiles[3].id}/launch`, { target: 'signin' });
+  }
   finally { releaseProbe(); }
-  assert.equal((await pending).status, 200);
+  assert.ok((await Promise.all(pending)).every(r => r.status===200));
   assert.equal(blocked.status, 400, blocked.raw);
-  assert.equal(app.calls.remote.length, 1);
-  assert.equal(app.calls.remote[0].profile.id, first.id);
+  assert.equal(app.calls.remote.length, 3);
+  assert.deepEqual((await app.state()).remoteSessions,{limit:3,active:3,starting:0});
+});
+
+test('internal desktop resolution is loopback-only and bound to the active generation',async t => {
+  const app=await fixture(t), profile=await app.create();
+  const route=`/internal/desktops/${profile.id}/${profile.id.replaceAll('-','')}`;
+  assert.equal((await app.request(route)).status,404);
+  assert.equal((await app.post(`/api/profiles/${profile.id}/launch`,{target:'diagnostics'})).status,200);
+  assert.deepEqual((await app.request(route)).value,{port:6101});
+  assert.equal((await app.request(route,{headers:{Host:'example.test'}})).status,403);
+  assert.equal((await app.request(route,{headers:{Origin:app.origin}})).status,403);
+  assert.equal((await app.request(`/internal/desktops/${profile.id}/${'0'.repeat(32)}`)).status,404);
+  await app.post(`/api/profiles/${profile.id}/close`);
+  assert.equal((await app.request(route)).status,404);
+});
+
+test('same account remains mutually exclusive even with spare capacity',async t => {
+  const app=await fixture(t), first=await app.create({accountLabel:'same'}), second=await app.create({accountLabel:'SAME'});
+  assert.equal((await app.post(`/api/profiles/${first.id}/launch`,{target:'diagnostics'})).status,200);
+  const blocked=await app.post(`/api/profiles/${second.id}/launch`,{target:'diagnostics'});
+  assert.equal(blocked.status,400);assert.match(blocked.value.error,/同一账号代号/);
+});
+
+test('a failed close remains retryable instead of being mislabeled as starting',async t => {
+  const app=await fixture(t), profile=await app.create();
+  await app.post(`/api/profiles/${profile.id}/launch`,{target:'diagnostics'});
+  app.control.desktopUnavailable=true;app.control.closeFails=true;
+  assert.equal((await app.post(`/api/profiles/${profile.id}/close`)).status,400);
+  const session=(await app.state()).profiles.find(p => p.id===profile.id).session;
+  assert.deepEqual(session,{active:true,managed:true,starting:false,desktopUrl:null});
+  app.control.closeFails=false;
+  assert.equal((await app.post(`/api/profiles/${profile.id}/close`)).status,200);
 });
 
 test('authenticated remote launches share the bridge with both probes and strip secrets from browser input and API output', async t => {

@@ -1,9 +1,7 @@
 [Unit]
 Description=Account Region Lab server browser controller
-After=network-online.target account-region-lab-desktop.service
-Requires=account-region-lab-desktop.service
+After=network-online.target
 Wants=network-online.target account-region-lab-gateway.service
-PartOf=account-region-lab-desktop.service
 StartLimitIntervalSec=60
 StartLimitBurst=5
 
@@ -18,15 +16,15 @@ Environment=PATH=/opt/account-region-lab/node/bin:/usr/local/sbin:/usr/local/bin
 Environment=REGION_LAB_REMOTE=1
 Environment=REGION_LAB_DATA_DIR=/var/lib/account-region-lab/data
 Environment=PORT=4317
-Environment=DISPLAY=:99
-Environment=XAUTHORITY=/run/account-region-lab/Xauthority
 Environment=XDG_RUNTIME_DIR=/run/account-region-lab
+RuntimeDirectory=account-region-lab
+RuntimeDirectoryMode=0700
 UMask=0077
 ExecStart=/opt/account-region-lab/node/bin/node /opt/account-region-lab/app/server.js
 Restart=on-failure
 RestartSec=3
-TimeoutStopSec=20
-KillMode=control-group
+TimeoutStopSec=40
+KillMode=mixed
 ProtectSystem=full
 ProtectHome=true
 

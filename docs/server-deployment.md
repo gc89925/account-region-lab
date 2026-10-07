@@ -2,7 +2,7 @@
 
 服务器模式把工作台、浏览器和代理连接都放在服务器上。本地电脑用浏览器访问工作台，再通过“服务器桌面”操作服务器上的 Chrome，手动完成 Google 登录。本机无需运行本项目或为服务器浏览器配置本机代理；本地网络仍须能访问服务器的 HTTPS 地址。
 
-这套部署面向一位使用者。配置、Chrome 用户目录和登录会话保存在服务器磁盘上，每个环境使用独立 UUID 目录。1 GB 内存的服务器应只保持一个账号浏览器运行，尽量减少标签页；视频或大型页面仍可能造成内存不足。它不是多人隔离的云浏览器平台。
+这套部署面向一位使用者。配置、Chrome 用户目录和登录会话保存在服务器磁盘上，每个环境使用独立 UUID 目录。最多同时运行 5 个环境，每个环境独占 Xvfb、窗口管理器、VNC/noVNC 和 Chrome 进程。设置 `REGION_LAB_MAX_ENVIRONMENTS=1` 到 `5` 可降低上限。1 GB 主机运行多个大型页面可能明显变慢，功能上限不等于承载能力。所有环境仍由同一个系统用户运行，不是虚拟机或多人安全隔离平台。
 
 首版 noVNC 提供画面和键鼠，不传输浏览器音频，不承诺流畅高清视频。原生浏览器的时区仍取服务器系统值，环境里的时区是诊断目标；不会伪造指纹或生成浏览行为。
 
@@ -13,14 +13,15 @@
   └─ HTTPS :443 → nginx
        └─ 127.0.0.1:4318 → 身份验证网关
             ├─ 工作台 → 127.0.0.1:4317
-            └─ /desktop/ → 127.0.0.1:6080 (noVNC / WebSocket)
-                               └─ 127.0.0.1:5901 (x11vnc)
-                                    └─ Xvfb :99 → 服务器 Chrome
+            └─ /desktop/<环境 UUID>/<本次运行标识>/
+                 └─ 127.0.0.1:6101..6105 (独立 noVNC / WebSocket)
+                      └─ 127.0.0.1:5902..5906 (独立 x11vnc)
+                           └─ Xvfb :200..:204 → 对应环境的 Chrome
 
 服务器 Chrome → 该账号配置的目标地区代理 → Google
 ```
 
-`4317`、`4318`、`6080` 和 `5901` 都必须只监听服务器回环地址。nginx 只能转发到身份验证网关，不能添加绕过网关的工作台或桌面转发规则。x11vnc 使用 `-nopw`，因为此内部端点依赖回环监听和外层网关验证；切勿把 VNC 或 noVNC 端口映射到公网。HTTP 与桌面 WebSocket 都需经过网关验证。
+`4317`、`4318`、`6101..6105` 和 `5902..5906` 都必须只监听服务器回环地址。桌面端口按需启动，关闭环境后回收。nginx 只能转发到身份验证网关，不能添加绕过网关的工作台或桌面转发规则。x11vnc 使用 `-nopw`，因为此内部端点依赖回环监听和外层网关验证；切勿把 VNC 或 noVNC 端口映射到公网。HTTP 与桌面 WebSocket 都需经过网关验证。旧的环境画面 URL 在环境重开后失效，不能因端口被复用而进入另一个环境。
 
 海外服务器解决的是连接发起位置。账号出口仍由所选代理决定；免费节点的寿命、速度和住宅属性不会因此改善，也不能保证 Google 的地区关联发生变化。七天是本工具的观察周期。
 
@@ -56,27 +57,28 @@ Chrome 必须由 `regionlab` 运行并保留浏览器沙箱。不要添加 `--no
    ```
 
    脚本仅在文件不存在时创建 `access.json`，不会覆盖已有账户；密码只用于计算带随机盐的 scrypt 哈希。自动化部署可通过标准输入提供一行密码，避免写入 shell 历史、进程参数或日志。需要重置时，应由部署者先停止网关、备份访问文件，再显式更换文件并重启。
-4. 安装三个 unit：
+4. 安装两个 unit：
 
    ```bash
-   sudo install -m 0644 /opt/account-region-lab/app/deploy/linux/account-region-lab-desktop.service /etc/systemd/system/
    sudo install -m 0644 /opt/account-region-lab/app/deploy/linux/account-region-lab.service /etc/systemd/system/
    sudo install -m 0644 /opt/account-region-lab/app/deploy/linux/account-region-lab-gateway.service /etc/systemd/system/
-   sudo systemd-analyze verify /etc/systemd/system/account-region-lab-desktop.service /etc/systemd/system/account-region-lab.service /etc/systemd/system/account-region-lab-gateway.service
+   sudo systemd-analyze verify /etc/systemd/system/account-region-lab.service /etc/systemd/system/account-region-lab-gateway.service
    sudo systemctl daemon-reload
-   sudo systemctl enable --now account-region-lab-desktop.service account-region-lab.service account-region-lab-gateway.service
+   sudo systemctl enable --now account-region-lab.service account-region-lab-gateway.service
    ```
 
-   桌面启动脚本由 `/usr/bin/bash` 执行，使用私有 Xauthority，禁止 X11 TCP 监听。noVNC 与 VNC 准备好后才向 systemd 报告启动完成。任意桌面组件退出都会使桌面服务失败，清理其子进程并按 unit 重启；`KillMode=control-group` 负责回收所属进程。
+   控制器按环境启动桌面脚本，使用各自私有 Xauthority，禁止 X11 TCP 监听。noVNC 与 VNC 准备好后再打开 Chrome；任意桌面组件退出会关闭该环境并回收资源，不影响其他环境。关闭浏览器后保留用户目录，重新打开须由用户操作。
+
+   从 v0.4 升级时先关闭正在运行的环境，停止工作台和网关，再执行 `sudo systemctl disable --now account-region-lab-desktop.service`。旧的共享桌面不再使用；安装新 unit 后执行 daemon-reload 并启动两个服务。不要同时启用旧桌面 unit。升级前备份数据及配置。
 5. 将 nginx 的 HTTPS 主机转发到 `http://127.0.0.1:4318`。保留真实 `Host`，设置 `X-Forwarded-Proto: https` 和正确的客户端来源信息；为 WebSocket 转发 `Upgrade`/`Connection`，使用 HTTP/1.1，并给予桌面连接足够的读取超时。公网只开放所需的 HTTPS 和受限的管理入口。先执行 `nginx -t`，再重载 nginx。
 
 ## 首次验收
 
 部署成功不能只以端口监听或首页打开为准，应完成以下实际流程：
 
-1. 查看三个 systemd 服务状态；使用 `ss -ltnp` 确认内部四个端口没有绑定 `0.0.0.0` 或公网地址。
+1. 查看两个 systemd 服务状态；使用 `ss -ltnp` 确认内部端口没有绑定 `0.0.0.0` 或公网地址。
 2. 在未登录的本地浏览器中打开外部 HTTPS 地址，确认先看到身份验证；工作台 API 和 `/desktop/` 不能绕过验证。登出后重新访问也需验证。
-3. 登录后打开服务器桌面，确认能看到 Openbox 桌面，鼠标、键盘和页面尺寸可用。
+3. 打开两个测试环境的诊断页，分别进入画面或独立窗口，确认画面不同、鼠标键盘只影响选中环境。切换画面、关闭一个窗口或一个环境后，另一个环境应保持运行。
 4. 在工作台配置一个可用的目标地区代理，先检测出口与 Google 目标页面，再打开 Google 登录页。Chrome 应出现在服务器桌面内；它不会在本机任务栏创建窗口。
 5. 手动完成登录后关闭该账号浏览器并重新打开同一环境，核对是否保留预期会话。浏览器登录能否持续取决于 Google 的会话规则；工具不会自行认定登录成功。
 6. 重启整套服务，检查工作台、桌面和相同 UUID 的浏览器目录是否恢复。登录启动或 systemd 启用并不等于已经验证过整机重启。
@@ -84,10 +86,10 @@ Chrome 必须由 `regionlab` 运行并保留浏览器沙箱。不要添加 `--no
 常用诊断命令：
 
 ```bash
-sudo systemctl status account-region-lab-desktop account-region-lab account-region-lab-gateway --no-pager
-sudo journalctl -u account-region-lab-desktop -u account-region-lab -u account-region-lab-gateway -n 100 --no-pager
+sudo systemctl status account-region-lab account-region-lab-gateway --no-pager
+sudo journalctl -u account-region-lab -u account-region-lab-gateway -n 100 --no-pager
 sudo ss -ltnp
-sudo systemctl restart account-region-lab-desktop.service
+sudo systemctl restart account-region-lab.service
 ```
 
 日志可能含远程访问记录。公开问题或日志前，应移除账号信息、IP、URL 中的私人内容和认证材料。

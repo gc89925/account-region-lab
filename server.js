@@ -14,7 +14,7 @@ import { createSocksBridge } from './lib/socks-bridge.js';
 import { createRemoteLauncher } from './lib/remote-browser.js';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
-const VERSION = '0.4.0';
+const VERSION = '0.5.0';
 
 function respond(res, status, data) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -37,8 +37,10 @@ async function readBody(req) {
   } catch { throw new Error('请求 JSON 无效。'); }
 }
 
-export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || defaultDataDir(), probe = probeProxy, google = probeGoogle, destinationProbe = probeDestination, diagnose = diagnoseProxy, launch = launchBrowser, browser = detectBrowser(), managed = createManagedLauncher(), catalog = createCatalog(), publicProxies = createPublicProxyCatalog(), vault, createBridge = createSocksBridge, remoteMode = process.env.REGION_LAB_REMOTE === '1', publicOrigin = process.env.REGION_LAB_PUBLIC_ORIGIN || '', remote = createRemoteLauncher() } = {}) {
+export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || defaultDataDir(), probe = probeProxy, google = probeGoogle, destinationProbe = probeDestination, diagnose = diagnoseProxy, launch = launchBrowser, browser = detectBrowser(), managed = createManagedLauncher(), catalog = createCatalog(), publicProxies = createPublicProxyCatalog(), vault, createBridge = createSocksBridge, remoteMode = process.env.REGION_LAB_REMOTE === '1', publicOrigin = process.env.REGION_LAB_PUBLIC_ORIGIN || '', maxRemoteEnvironments = Number(process.env.REGION_LAB_MAX_ENVIRONMENTS || 5), remote } = {}) {
   dataDir = resolve(dataDir);
+  if (!Number.isInteger(maxRemoteEnvironments) || maxRemoteEnvironments < 1 || maxRemoteEnvironments > 5) throw new Error('服务器并发环境数必须是 1–5。');
+  remote ||= createRemoteLauncher({maxEnvironments:maxRemoteEnvironments});
   if (remoteMode) {
     let parsed;
     try { parsed = new URL(publicOrigin); } catch { throw new Error('服务器模式需要配置 HTTPS 公共访问地址。'); }
@@ -69,17 +71,28 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
   const token = randomBytes(32).toString('hex');
   const busy = new Set();
   const accountBusy = new Set();
+  const launching = new Set();
   const bridges = new Map();
   const bridgeStarts = new Map();
   let diagnosticsActive = 0;
   const save = () => atomicSave(file, state);
   const sessionActive = id => remoteMode ? remote.isActive(id) : managed.isActive(id);
-  const displayProfile = p => { const { proxyAuth, ...visible } = withStats(p); return ({ ...visible, proxyAuthConfigured: !!proxyAuth, locked: p.launches.length > 0, session: { active: sessionActive(p.id), managed: remoteMode || p.environment.engine === 'managed' }, network: {
+  const desktopFor = id => {
+    const desktop = remoteMode ? remote.getDesktop?.(id) : null;
+    return desktop && Number.isInteger(desktop.port) && desktop.port >= 6101 && desktop.port <= 6105 && /^[a-f0-9]{32}$/.test(desktop.generation) ? desktop : null;
+  };
+  const displayProfile = p => { const { proxyAuth, ...visible } = withStats(p); const desktop = desktopFor(p.id); return ({ ...visible, proxyAuthConfigured: !!proxyAuth, locked: p.launches.length > 0, session: { active: sessionActive(p.id), managed: remoteMode || p.environment.engine === 'managed', ...(remoteMode ? {
+    starting: !desktop && launching.has(p.id),
+    desktopUrl: desktop ? `/desktop/${p.id}/${desktop.generation}/vnc.html?autoconnect=true&resize=scale&path=desktop/${p.id}/${desktop.generation}/websockify` : null,
+  } : {}) }, network: {
     checkCount: p.checks.length,
     uniqueIps: new Set(p.checks.filter(c => c.ip).map(c => c.ip)).size,
     lastCheckedAt: p.checks.at(-1)?.at || null,
   } }); };
-  const snapshot = () => ({ version: VERSION, profiles: state.profiles.map(displayProfile), browser, token, links: LINKS, ...(remoteMode ? {remoteDesktopUrl:'/desktop/vnc.html?autoconnect=true&resize=scale&path=desktop/websockify'} : {}), capabilities: { remoteBrowser:remoteMode, managed: !remoteMode, devices: 'manual-review', catalog: 'VPN Gate metadata only' } });
+  const snapshot = () => {
+    const profiles = state.profiles.map(displayProfile);
+    return { version: VERSION, profiles, browser, token, links: LINKS, ...(remoteMode ? {remoteSessions:{limit:maxRemoteEnvironments, active:profiles.filter(p => p.session.desktopUrl).length, starting:profiles.filter(p => p.session.starting).length}} : {}), capabilities: { remoteBrowser:remoteMode, ...(remoteMode ? {maxRemoteEnvironments} : {}), managed: !remoteMode, devices: 'manual-review', catalog: 'VPN Gate metadata only' } };
+  };
 
   async function readAuth(body, profile, proxy) {
     if (body.clearProxyAuth === true) return null;
@@ -175,6 +188,15 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
     let lockedId, lockedAccount;
     try {
       const url = new URL(req.url, `http://${req.headers.host}`);
+      if (url.pathname.startsWith('/internal/')) {
+        // Only the loopback gateway may resolve a current desktop. Public
+        // requests retain the public Host and are also blocked by the gateway.
+        if (!remoteMode || !hosts.slice(0,2).includes(req.headers.host) || req.headers.origin || !['127.0.0.1','::1','::ffff:127.0.0.1'].includes(req.socket.remoteAddress)) return respond(res,403,{error:'内部接口不可从工作台访问。'});
+        const route = /^\/internal\/desktops\/([a-f0-9-]{36})\/([a-f0-9]{32})$/.exec(url.pathname);
+        const desktop = req.method === 'GET' && route ? desktopFor(route[1]) : null;
+        if (!desktop || desktop.generation !== route[2]) return respond(res,404,{error:'该环境画面已关闭，请重新打开。'});
+        return respond(res,200,{port:desktop.port});
+      }
       if (req.method === 'GET' && url.pathname === '/api/health') return respond(res, 200, { app: 'account-region-lab', version: VERSION, ready: true, workspaceId, instanceId });
       if (req.method === 'GET' && url.pathname === '/api/state') return respond(res, 200, snapshot());
       if (req.method === 'GET' && url.pathname === '/api/proxies') return respond(res,200,await publicProxies.list((url.searchParams.get('country') || 'ALL').toUpperCase()));
@@ -262,7 +284,13 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
           const destination = targetUrl(profile, body.target);
           if (!browser) throw new Error('未检测到 Chrome 或 Edge，请安装浏览器或设置 BROWSER_PATH。');
           if (!profile.proxy) throw new Error('请先设置代理，再打开该环境。诊断页不访问外网，但会固定该环境的网络设置。');
-          if (remoteMode && state.profiles.some(p => p.id !== profile.id && (sessionActive(p.id) || busy.has(p.id)))) throw new Error('这台服务器一次运行一个账号浏览器，请先关闭当前环境。');
+          if (remoteMode && !sessionActive(profile.id)) {
+            const occupied = state.profiles.filter(p => sessionActive(p.id) || launching.has(p.id)).length;
+            if (occupied >= maxRemoteEnvironments) throw new Error(`服务器最多同时运行 ${maxRemoteEnvironments} 个环境，请先关闭一个环境。`);
+          }
+          // Reserve before network probes yield so concurrent requests cannot
+          // overbook the server. A network check alone does not reserve a slot.
+          if (remoteMode) launching.add(profile.id);
           const accountKey = profile.accountLabel.toLowerCase();
           if (accountKey) {
             if (accountBusy.has(accountKey) || state.profiles.some(p => p.id !== profile.id && p.accountLabel.toLowerCase() === accountKey && sessionActive(p.id))) throw new Error('同一账号代号已有受控环境运行或启动中。请先关闭它。此限制只覆盖本工具的受控环境。');
@@ -329,7 +357,7 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
       }
       respond(res, 404, { error: '页面不存在。' });
     } catch (err) { respond(res, 400, { error: err.code ? '本地文件或服务操作失败，请检查程序终端。' : err.message }); }
-    finally { if (lockedId) busy.delete(lockedId); if (lockedAccount) accountBusy.delete(lockedAccount); }
+    finally { if (lockedId) { busy.delete(lockedId); launching.delete(lockedId); } if (lockedAccount) accountBusy.delete(lockedAccount); }
   });
   server.requestTimeout = 30000;
   server.headersTimeout = 15000;
