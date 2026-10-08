@@ -1,5 +1,5 @@
 import { parseProxyInputs, applyParsedProxyInput } from './proxy-input.js';
-import { inspectProxySession } from './proxy-session.js';
+import { inspectProxySession, getProxySessionOptions, applyProxySessionOptions } from './proxy-session.js';
 
 const $ = (selector) => document.querySelector(selector);
 const countryNames = { IN: '印度', NG: '尼日利亚', CN: '中国', US: '美国', GB: '英国', JP: '日本', KR: '韩国', SG: '新加坡', DE: '德国', CA: '加拿大', AU: '澳大利亚' };
@@ -25,6 +25,9 @@ let scanPollTimer = null;
 let scanRequestPending = false;
 let diagnosisSequence = 0;
 let importedProxies = [];
+let proxyOptionsSource = null;
+let proxyOptionsApplied = {};
+const proxyOptionsDirty = new Set();
 const pending = new Set();
 const operationStates = new Map();
 const proxyChecks = new Map();
@@ -534,6 +537,7 @@ function openProfileDialog(profile = null, defaults = {}) {
   const values = profile || defaults.template || {};
   editedEnvironmentFields.clear();
   $('#profile-form').reset();
+  resetProxyOptions();
   resetProxyImport();
   $('#profile-proxy').setCustomValidity('');
   $('#proxy-import-status').hidden = true;
@@ -569,6 +573,7 @@ function openProfileDialog(profile = null, defaults = {}) {
   const isBound = profileLocked(profile);
   ['profile-country', 'profile-proxy', 'proxy-username', 'proxy-password', 'clear-proxy-auth', 'clear-profile-proxy', 'proxy-import-protocol', 'profile-strict-ip', 'environment-engine', 'environment-locale', 'environment-timezone', 'environment-width', 'environment-height', 'environment-color'].forEach((id) => { document.getElementById(id).disabled = isBound; });
   if (remoteBrowserEnabled()) $('#environment-engine').disabled = true;
+  syncProxyOptions();
   $('#profile-binding-note').textContent = isBound
     ? remoteBrowserEnabled() || profile?.environment?.engine === 'managed'
       ? '此环境正在运行或启动。请先关闭浏览器，再修改代理、认证或目标国家；登录会话会保留。'
@@ -620,6 +625,7 @@ function profileFormBody() {
       colorScheme: $('#environment-color').value
     }
   });
+  if (!profileLocked(profile) && Object.keys(proxyOptionsApplied).length && !$('#clear-proxy-auth').checked) body.proxyOptions = { ...proxyOptionsApplied };
   return body;
 }
 
@@ -632,7 +638,7 @@ function resetProxyDiagnosis() {
   updateProxySessionSummary();
 }
 
-function currentProxySession() {
+function baseProxySession() {
   const proxy = $('#profile-proxy').value.trim();
   const username = $('#proxy-username').value;
   const password = $('#proxy-password').value;
@@ -642,6 +648,127 @@ function currentProxySession() {
   try {
     return inspectProxySession(proxy, $('#clear-proxy-auth').checked ? null : { username, password });
   } catch { return null; }
+}
+
+function proxyOptionInputs() { return [...document.querySelectorAll('[data-proxy-option]')]; }
+
+function resetProxyOptions() {
+  proxyOptionsSource = null;
+  proxyOptionsApplied = {};
+  proxyOptionsDirty.clear();
+  $('#iproyal-options').open = false;
+  $('#iproyal-options-error').hidden = true;
+  for (const input of proxyOptionInputs()) { input.value = ''; input.setCustomValidity(''); }
+}
+
+function baseProxyOptions(session) {
+  if ($('#proxy-password').value && !$('#clear-proxy-auth').checked) {
+    try { return getProxySessionOptions($('#profile-proxy').value.trim(), { username: $('#proxy-username').value, password: $('#proxy-password').value }); }
+    catch { return session?.options || {}; }
+  }
+  return session?.options || (session?.provider === 'iproyal' ? {
+    country: session.country?.toLowerCase() || '', lifetime: session.lifetime || '',
+    ...(session.killswitch ? { killswitch: '1' } : {}), ...(session.streaming ? { streaming: '1' } : {})
+  } : {});
+}
+
+function fillProxyOptions(session = baseProxySession()) {
+  const options = { ...baseProxyOptions(session), ...proxyOptionsApplied };
+  for (const input of proxyOptionInputs()) {
+    const value = options[input.dataset.proxyOption] || '';
+    if (input.tagName === 'SELECT' && value && ![...input.options].some(option => option.value === value)) {
+      const unknown = element('option', '', `导入值：${value}`); unknown.value = value; input.append(unknown);
+    }
+    input.value = value;
+    input.setCustomValidity('');
+  }
+  const savedSession = !$('#proxy-password').value && session?.sessionHint && !Object.hasOwn(proxyOptionsApplied, 'session');
+  $('#iproyal-session').placeholder = savedSession ? `已保存 ${session.sessionHint}；留空保留` : '8 位字母或数字';
+  $('#iproyal-session-help').textContent = savedSession ? '现有会话已保存，留空会继续使用；输入新会话会替换它，可能改变出口 IP。' : '保持同一会话有助于维持出口；更换会话可能更换 IP。';
+}
+
+function syncProxyOptions() {
+  const session = baseProxySession();
+  const source = JSON.stringify([editingProfileId, $('#profile-proxy').value, $('#proxy-username').value, $('#proxy-password').value, $('#clear-proxy-auth').checked]);
+  if (source !== proxyOptionsSource) {
+    proxyOptionsSource = source;
+    proxyOptionsApplied = {};
+    proxyOptionsDirty.clear();
+    fillProxyOptions(session);
+    $('#iproyal-options-error').hidden = true;
+  }
+  const visible = session?.provider === 'iproyal';
+  $('#iproyal-options').hidden = !visible;
+  const locked = profileLocked(state.profiles.find(item => item.id === editingProfileId));
+  $('#iproyal-options-fields').disabled = !visible || locked || $('#clear-proxy-auth').checked;
+  const pending = proxyOptionsDirty.size > 0;
+  $('#apply-iproyal-options').disabled = !pending;
+  $('#revert-iproyal-options').disabled = !pending;
+  $('#iproyal-options-status').textContent = locked ? '环境正在运行，关闭浏览器后可修改。'
+    : $('#clear-proxy-auth').checked ? '已选择清除认证；重新粘贴完整代理后可设置参数。'
+      : pending ? '参数尚未应用。请点击“应用参数”，再诊断或保存。'
+        : Object.keys(proxyOptionsApplied).length ? '参数已应用到本次配置，尚未保存。请重新诊断，再保存环境。'
+          : '显示当前线路参数；空白项不添加。供应商权限与实际可用节点以诊断结果为准。';
+}
+
+function currentProxySession() {
+  const session = baseProxySession();
+  if (session?.provider !== 'iproyal' || !Object.keys(proxyOptionsApplied).length) return session;
+  const proxy = $('#profile-proxy').value.trim();
+  const auth = { username: $('#proxy-username').value, password: $('#proxy-password').value };
+  if (auth.password) {
+    try { return inspectProxySession(proxy, applyProxySessionOptions(proxy, auth, proxyOptionsApplied)); } catch { return session; }
+  }
+  const options = { ...baseProxyOptions(session), ...proxyOptionsApplied };
+  const countries = typeof options.country === 'string' && /^[a-z]{2}(?:,[a-z]{2})*$/i.test(options.country) ? options.country.toUpperCase().split(',') : [];
+  const replacementSession = proxyOptionsApplied.session;
+  return { ...session, options, countries, country: countries.length === 1 ? countries[0] : null,
+    sessionHint: replacementSession ? `${replacementSession.slice(0, 2)}…${replacementSession.slice(-2)}` : session.sessionHint,
+    lifetime: options.lifetime || null, killswitch: options.killswitch === '1', streaming: options.streaming === '1',
+    issues: [] };
+}
+
+function requireAppliedProxyOptions() {
+  if (!proxyOptionsDirty.size || $('#iproyal-options-fields').disabled) return true;
+  $('#iproyal-options').open = true;
+  $('#iproyal-options-error').textContent = '请先应用或撤销 IPRoyal 参数修改，再诊断或保存。';
+  $('#iproyal-options-error').hidden = false;
+  $('#apply-iproyal-options').focus();
+  return false;
+}
+
+function applyProxyOptionsFromForm() {
+  if ($('#iproyal-options-fields').disabled || !proxyOptionsDirty.size) return;
+  const fields = proxyOptionInputs();
+  if (fields.some(input => !input.reportValidity())) return;
+  const base = baseProxyOptions(baseProxySession());
+  const changes = { ...proxyOptionsApplied };
+  for (const key of proxyOptionsDirty) {
+    const input = fields.find(item => item.dataset.proxyOption === key);
+    let value = input.value.trim();
+    if (key === 'country') value = value.toLowerCase();
+    if (value === (base[key] || '')) delete changes[key];
+    else changes[key] = value;
+  }
+  const effective = { ...base, ...changes };
+  try {
+    if ($('#profile-strict-ip').checked && effective.forcerandom === '1') throw new Error('随机出口 forcerandom 与严格绑定出口 IP 冲突。请移除随机出口参数，或明确关闭严格模式。');
+    if ($('#profile-strict-ip').checked && (effective.set || effective.country?.includes(','))) throw new Error('严格模式需要单个国家，请清空国家集合并只填写一个国家代码。');
+    if ($('#proxy-password').value) applyProxySessionOptions($('#profile-proxy').value.trim(), { username: $('#proxy-username').value, password: $('#proxy-password').value }, changes);
+    proxyOptionsApplied = changes;
+    proxyOptionsDirty.clear();
+    if (Object.hasOwn(changes, 'country') && /^[a-z]{2}$/i.test(changes.country)) {
+      $('#profile-country').value = changes.country.toUpperCase();
+      $('#proxy-import-country').hidden = true;
+      updateCountryDefaults();
+    }
+    $('#iproyal-options-error').hidden = true;
+    fillProxyOptions();
+    resetProxyDiagnosis();
+  } catch (error) {
+    $('#iproyal-options-error').textContent = error.message;
+    $('#iproyal-options-error').hidden = false;
+  }
 }
 
 function proxySessionDetails(session, { preparing = false } = {}) {
@@ -657,6 +784,7 @@ function proxySessionDetails(session, { preparing = false } = {}) {
 function updateProxySessionSummary() {
   const panel = $('#proxy-session-summary');
   if (!panel) return;
+  syncProxyOptions();
   const session = currentProxySession();
   const strict = $('#profile-strict-ip').checked;
   panel.replaceChildren();
@@ -666,7 +794,10 @@ function updateProxySessionSummary() {
     : '首次出口检查通过并启动浏览器后绑定实际出口；之后检查或启动时发现 IP 变化即拦截。关闭后仍会核对出口国家。本选项不能把轮换代理变成固定代理。';
   if (panel.hidden) return;
   panel.append(element('strong', '', 'IPRoyal 会话参数'), element('p', '', proxySessionDetails(session, { preparing: strict })));
-  panel.append(element('p', 'field-help', 'country、session、lifetime、killswitch 等后缀都是代理密码的一部分；完整内容保存在密码框中，不能只保留基础密码。这里仅显示脱敏摘要。'));
+  const options = session.options || {};
+  const routing = ['region', 'state', 'city', 'isp', 'set'].filter(key => options[key]).map(key => `${key}：${options[key]}`);
+  if (routing.length) panel.append(element('p', '', routing.join(' · ')));
+  panel.append(element('p', 'field-help', '这些参数属于代理认证。展开下方设置可按需修改；诊断和保存会合并为完整认证，已保存的密码与会话不会回显。'));
   const issues = Array.isArray(session.issues) ? session.issues : [];
   if (issues.length) panel.append(element('p', 'diagnosis-warning', issues.map(issue => issue.message).join(' ')));
 }
@@ -837,6 +968,7 @@ function renderProxyDiagnosis(result, input) {
 }
 
 async function diagnoseProxy() {
+  if (!requireAppliedProxyOptions()) return;
   if (!$('#profile-proxy').reportValidity()) return;
   const proxy = $('#profile-proxy').value.trim();
   if (!proxy) { $('#profile-proxy').focus(); toast('先填写代理地址，再诊断连接。', 'error'); return; }
@@ -844,6 +976,7 @@ async function diagnoseProxy() {
   const input = { proxy, country: $('#profile-country').value.trim().toUpperCase(),
     proxyUsername: $('#proxy-username').value, proxyPassword: $('#proxy-password').value,
     clearProxyAuth: $('#clear-proxy-auth').checked, strictIp: $('#profile-strict-ip').checked };
+  if (Object.keys(proxyOptionsApplied).length && !$('#clear-proxy-auth').checked) input.proxyOptions = { ...proxyOptionsApplied };
   if (profile && profile.proxy === proxy) input.profileId = profile.id;
   const sequence = ++diagnosisSequence;
   const button = $('#diagnose-proxy');
@@ -1340,7 +1473,21 @@ $('#profile-proxy').addEventListener('input', (event) => {
   resetProxyImport();
   if (field.value.includes('@') || /^(?:[^:/\s]+|\[[^\]]+\]):\d+:[^:]+:/.test(field.value)) importProxyCredentials(field.value);
 });
-$('#profile-dialog').addEventListener('close', () => { resetProxyImport(); $('#proxy-password').value = ''; resetProxyDiagnosis(); });
+$('#profile-dialog').addEventListener('close', () => { resetProxyImport(); $('#proxy-password').value = ''; resetProxyOptions(); resetProxyDiagnosis(); });
+for (const input of proxyOptionInputs()) {
+  for (const event of ['input', 'change']) input.addEventListener(event, () => {
+    proxyOptionsDirty.add(input.dataset.proxyOption);
+    $('#iproyal-options-error').hidden = true;
+    resetProxyDiagnosis();
+  });
+}
+$('#apply-iproyal-options').addEventListener('click', applyProxyOptionsFromForm);
+$('#revert-iproyal-options').addEventListener('click', () => {
+  proxyOptionsDirty.clear();
+  fillProxyOptions();
+  $('#iproyal-options-error').hidden = true;
+  resetProxyDiagnosis();
+});
 $('#clear-profile-proxy').addEventListener('click', clearProfileProxy);
 $('#close-profile-for-edit').addEventListener('click', closeProfileForEdit);
 $('#proxy-import-choice').addEventListener('change', event => applyImportedProxy(Number(event.currentTarget.value)));
@@ -1394,7 +1541,9 @@ $('#open-devices').addEventListener('click', (event) => {
 });
 document.querySelectorAll('[data-close]').forEach((button) => button.addEventListener('click', () => document.getElementById(button.dataset.close).close()));
 
-$('#profile-form').addEventListener('submit', (event) => saveForm({
+$('#profile-form').addEventListener('submit', (event) => {
+  if (!requireAppliedProxyOptions()) { event.preventDefault(); return; }
+  return saveForm({
   event,
   form: $('#profile-form'),
   button: $('#profile-submit'),
@@ -1411,7 +1560,8 @@ $('#profile-form').addEventListener('submit', (event) => saveForm({
       : '环境已保存，尚未配置代理。点击“登录 Google 账号”填写出口地址后即可继续。', profile.proxy ? 'success' : 'warning');
     document.getElementById(`profile-${profile.id}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
   }
-}));
+  });
+});
 
 $('#devices-form').addEventListener('submit', (event) => saveForm({
   event,

@@ -12,11 +12,11 @@ import { createPublicProxyCatalog } from './lib/public-proxies.js';
 import { createCredentialVault, validateProxyAuth } from './lib/proxy-auth.js';
 import { createSocksBridge } from './lib/socks-bridge.js';
 import { createRemoteLauncher } from './lib/remote-browser.js';
-import { inspectProxySession, prepareProxySession } from './public/proxy-session.js';
+import { inspectProxySession, prepareProxySession, applyProxySessionOptions } from './public/proxy-session.js';
 import { sampleProxyStability, createStabilityHistory } from './lib/proxy-stability.js';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
-const VERSION = '0.6.1';
+const VERSION = '0.7.0';
 
 function respond(res, status, data) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -127,13 +127,24 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
   async function saveAuth(body, profile, proxy, settings) {
     // Clearing an expired endpoint must also forget its saved credentials.
     if (!proxy) return { proxyUsername: '', proxyAuth: null };
-    const auth = await readAuth(body, profile, proxy);
+    const auth = await readEffectiveAuth(body, profile, proxy);
+    if (body.clearProxyAuth === true) return { proxyUsername:'', proxyAuth:null };
     const prepared = prepareProxySession(proxy, auth, settings);
     if (!prepared.auth) return { proxyUsername: '', proxyAuth: null };
     const effective = prepared.auth;
     const previous = profile?.proxyAuth ? await vault.open(profile.proxyAuth) : null;
     const unchanged = previous && previous.username === effective.username && previous.password === effective.password;
     return { proxyUsername: effective.username, proxyAuth: unchanged ? profile.proxyAuth : await vault.seal(effective) };
+  }
+
+  async function readEffectiveAuth(body, profile, proxy) {
+    const auth = await readAuth(body, profile, proxy);
+    if (!Object.hasOwn(body, 'proxyOptions')) return auth;
+    const updates = body.proxyOptions;
+    if (!updates || typeof updates !== 'object' || Array.isArray(updates)) throw new Error('IPRoyal 高级参数必须是字段对象。');
+    if (!Object.keys(updates).length) return auth;
+    if (body.clearProxyAuth === true) throw new Error('清除认证时不能同时修改 IPRoyal 参数。请重新粘贴完整代理后编辑。');
+    return applyProxySessionOptions(proxy, auth, updates);
   }
 
   async function connection(profile) {
@@ -261,7 +272,7 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
           let temporary;
           try {
             const strictIp = body.strictIp ?? existing?.strictIp ?? true;
-            const prepared = prepareProxySession(proxy, await readAuth(body, existing, proxy), {strictIp,country});
+            const prepared = prepareProxySession(proxy, await readEffectiveAuth(body, existing, proxy), {strictIp,country});
             const auth = prepared.auth;
             if (auth) temporary = await createBridge(proxy, auth);
             const tested = temporary?.proxy || proxy;

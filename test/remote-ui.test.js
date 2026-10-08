@@ -5,6 +5,7 @@ import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { join } from 'node:path';
 import { chromium } from 'playwright-core';
+import { applyProxySessionOptions, inspectProxySession } from '../public/proxy-session.js';
 
 async function browserPath() {
   if (process.env.REGION_LAB_SKIP_UI_TESTS === '1') return null;
@@ -216,7 +217,7 @@ test('proxy settings can be replaced after close, pasted residential sessions st
 
   await edit();
   const prefix = 'geo.iproyal.com:12321:demo-user:';
-  const syntheticPasswords = ['DemoSecret_country-id_session-ExampleOne_lifetime-168h_streaming-1', 'DemoSecret_country-id_session-ExampleTwo_lifetime-168h_streaming-1', 'DemoSecret_country-id_session-ExampleThree_lifetime-168h_streaming-1'];
+  const syntheticPasswords = ['DemoSecret_country-id_session-Exampl01_lifetime-168h_streaming-1', 'DemoSecret_country-id_session-Exampl02_lifetime-168h_streaming-1', 'DemoSecret_country-id_session-Exampl03_lifetime-168h_streaming-1'];
   await paste(syntheticPasswords.map(password => prefix + password).join(''));
   assert.equal(await page.locator('#proxy-import-choice option').count(), 3);
   assert.equal(await page.locator('#profile-proxy').inputValue(), 'socks5://geo.iproyal.com:12321');
@@ -225,7 +226,7 @@ test('proxy settings can be replaced after close, pasted residential sessions st
   assert.equal(await page.locator('#profile-country').inputValue(), 'IN', 'pasted country must not silently change the existing country');
   assert.match(await page.locator('#proxy-import-status').innerText(), /ID 为印度尼西亚/);
   assert.match(await page.locator('#proxy-session-summary').innerText(), /168h/);
-  assert.match(await page.locator('#proxy-session-summary').innerText(), /密码的一部分/);
+  assert.match(await page.locator('#proxy-session-summary').innerText(), /代理认证/);
   assert.match(await page.locator('#proxy-strict-help').innerText(), /首次启用可能分配新出口/);
   const visibleChoices = await page.locator('#proxy-import-choice').innerText();
   assert.ok(!visibleChoices.includes('DemoSecret') && !visibleChoices.includes('demo-user') && !visibleChoices.includes('ExampleOne'), 'choices expose only endpoint, country, and masked session hints');
@@ -365,5 +366,116 @@ test('proxy diagnosis shows sample changes and saved session details without acc
   assert.equal(await page.locator('#proxy-diagnosis').isHidden(), true, 'a response for the former strict setting cannot repaint the updated form');
   await runDiagnosis();
   assert.equal(requests.at(-1).strictIp, false);
+  assert.deepEqual(errors, []);
+});
+
+test('IPRoyal options apply only edited fields, preserve saved secrets and invalidate diagnosis', async t => {
+  const executablePath = await browserPath();
+  if (!executablePath) { t.skip('A local Chrome/Chromium/Edge executable is needed for the browser UI test'); return; }
+  const proxy = 'socks5://geo.iproyal.com:12321';
+  let auth = { username: 'synthetic-user', password: 'SyntheticBase_country-ng_session-Alpha123_lifetime-168h_streaming-1_killswitch-1' };
+  const profile = { id: '00000000-0000-4000-8000-000000000021', label: '参数测试环境', country: 'NG', accountLabel: '',
+    proxy, proxyUsername: auth.username, proxyAuthConfigured: true, proxySession: inspectProxySession(proxy, auth),
+    strictIp: true, environment: { engine: 'native' }, launches: [], checks: [], observations: [], locked: false,
+    session: { active: false, managed: true, starting: false } };
+  const requests = [], patches = [], errors = [];
+  const staticFiles = new Map(await Promise.all(['index.html', 'app.js', 'style.css', 'proxy-input.js', 'proxy-session.js'].map(async name => [name, await readFile(new URL(`../public/${name}`, import.meta.url))])));
+  const server = createServer(async (request, response) => {
+    const url = new URL(request.url, 'http://localhost');
+    const json = value => { response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify(value)); };
+    const body = async () => { let text = ''; for await (const chunk of request) text += chunk; return JSON.parse(text); };
+    if (url.pathname === '/api/state') return json({ profiles: [profile], token: 'test-token', browser: { name: 'Test Chrome' }, capabilities: { remoteBrowser: true, maxRemoteEnvironments: 5 }, links: {} });
+    if (url.pathname === '/api/proxies/scan') return json({ state: 'idle', running: false });
+    if (url.pathname === '/api/proxy/diagnose') {
+      const input = await body(); requests.push(input);
+      return json({ ok: true, readyToLaunch: true, configuredProtocol: 'socks5', probe: { ip: '203.0.113.88', country: input.country },
+        googleReachable: true, targetCountryMatches: true });
+    }
+    if (url.pathname === `/api/profiles/${profile.id}` && request.method === 'PATCH') {
+      const input = await body(); patches.push(input);
+      auth = applyProxySessionOptions(input.proxy, { username: input.proxyUsername, password: input.proxyPassword || auth.password }, input.proxyOptions || {});
+      profile.country = input.country; profile.proxySession = inspectProxySession(proxy, auth); return json(profile);
+    }
+    const name = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
+    if (staticFiles.has(name)) { response.setHeader('Content-Type', name.endsWith('.js') ? 'text/javascript' : name.endsWith('.css') ? 'text/css' : 'text/html'); return response.end(staticFiles.get(name)); }
+    response.statusCode = 404; response.end();
+  });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  t.after(async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
+  const browser = await chromium.launch({ executablePath, headless: true }); t.after(() => browser.close());
+  const context = await browser.newContext();
+  await context.route('**/*', route => route.request().url().startsWith(origin + '/') ? route.continue() : route.abort());
+  const page = await context.newPage(); page.on('pageerror', error => errors.push(error.message));
+  const diagnose = async () => {
+    const completed = page.waitForResponse(response => response.url() === `${origin}/api/proxy/diagnose`);
+    await page.locator('#diagnose-proxy').click(); await completed;
+    await page.waitForFunction(() => document.querySelector('#diagnose-proxy').textContent === '重新诊断');
+  };
+  await page.goto(origin);
+  await page.getByRole('button', { name: '编辑参数测试环境', exact: true }).click();
+  assert.equal(await page.locator('#iproyal-options').isVisible(), true);
+  await page.locator('#iproyal-options > summary').click();
+  assert.equal(await page.locator('#iproyal-country').inputValue(), 'ng');
+  assert.equal(await page.locator('#iproyal-session').inputValue(), '');
+  assert.match(await page.locator('#iproyal-session').getAttribute('placeholder'), /已保存/);
+  assert.equal(await page.locator('#proxy-password').inputValue(), '');
+  assert.doesNotMatch(await page.locator('#profile-dialog').innerText(), /SyntheticBase|Alpha123/);
+  await diagnose();
+  await page.locator('#iproyal-city').fill('lagos');
+  assert.equal(await page.locator('#proxy-diagnosis').isHidden(), true);
+  const countBeforeApply = requests.length;
+  await page.locator('#diagnose-proxy').click();
+  assert.equal(requests.length, countBeforeApply, 'unapplied values cannot use an old diagnosis configuration');
+  assert.match(await page.locator('#iproyal-options-error').innerText(), /先应用/);
+  await page.locator('#apply-iproyal-options').click();
+  await diagnose();
+  assert.deepEqual(requests.at(-1).proxyOptions, { city: 'lagos' });
+  assert.equal(requests.at(-1).proxyPassword, '');
+  await page.locator('#profile-submit').click();
+  await page.waitForFunction(() => !document.querySelector('#profile-dialog').open);
+  assert.deepEqual(patches.at(-1).proxyOptions, { city: 'lagos' });
+  assert.match(auth.password, /_session-Alpha123/);
+
+  await page.getByRole('button', { name: '编辑参数测试环境', exact: true }).click();
+  await page.locator('#profile-proxy').evaluate((input, value) => {
+    const clipboardData = new DataTransfer(); clipboardData.setData('text/plain', value);
+    input.dispatchEvent(new ClipboardEvent('paste', { clipboardData, bubbles: true }));
+  }, 'geo.iproyal.com:12321:synthetic-user:SyntheticBase_country-ng_session-Beta1234_lifetime-24h_streaming-1');
+  await page.locator('#iproyal-options > summary').click();
+  assert.equal(await page.locator('#iproyal-session').inputValue(), 'Beta1234');
+  assert.equal(await page.locator('#iproyal-session').getAttribute('type'), 'password');
+  assert.equal(await page.locator('#iproyal-lifetime').inputValue(), '24h');
+  await page.locator('#iproyal-country').fill('ph');
+  await page.locator('#iproyal-city').fill('manila');
+  await page.locator('#apply-iproyal-options').click();
+  assert.equal(await page.locator('#profile-country').inputValue(), 'PH');
+  await diagnose();
+  assert.deepEqual(requests.at(-1).proxyOptions, { country: 'ph', city: 'manila' });
+  assert.match(requests.at(-1).proxyPassword, /_session-Beta1234/);
+  await page.locator('.iproyal-extra > summary').click();
+  await page.locator('#iproyal-forcerandom').selectOption('1');
+  await page.locator('#apply-iproyal-options').click();
+  assert.match(await page.locator('#iproyal-options-error').innerText(), /严格.*冲突/);
+  assert.equal(await page.locator('#profile-strict-ip').isChecked(), true);
+  await page.locator('#revert-iproyal-options').click();
+  assert.equal(await page.locator('#iproyal-forcerandom').inputValue(), '');
+  await page.getByRole('button', { name: '关闭环境设置', exact: true }).click();
+  await page.waitForFunction(() => !document.querySelector('#proxy-password').value && !document.querySelector('#iproyal-session').value);
+  assert.equal(await page.locator('#proxy-password').inputValue(), '');
+  assert.equal(await page.locator('#iproyal-session').inputValue(), '');
+
+  profile.session.active = true; profile.locked = true;
+  await page.locator('#refresh').click();
+  await page.waitForFunction(() => !document.querySelector('#refresh').disabled);
+  await page.getByRole('button', { name: '编辑参数测试环境', exact: true }).click();
+  assert.equal(await page.locator('#iproyal-options-fields').evaluate(fieldset => fieldset.disabled), true);
+  assert.equal(await page.locator('#iproyal-city').isDisabled(), true);
+  await page.getByRole('button', { name: '关闭环境设置', exact: true }).click();
+  profile.session.active = false; profile.locked = false; profile.proxy = 'socks5://ordinary.example:1080'; profile.proxySession = null;
+  await page.locator('#refresh').click();
+  await page.waitForFunction(() => !document.querySelector('#refresh').disabled);
+  await page.getByRole('button', { name: '编辑参数测试环境', exact: true }).click();
+  assert.equal(await page.locator('#iproyal-options').isHidden(), true);
   assert.deepEqual(errors, []);
 });

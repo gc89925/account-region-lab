@@ -165,6 +165,44 @@ test('newline imports handle different gateways and protocols and preserve singl
   assert.deepEqual(parseProxyInputs('socks5://demo:one@proxy.example:1080'), [parseProxyInput('socks5://demo:one@proxy.example:1080')]);
 });
 
+test('consecutive provider rows split with complete optional parameters in any order', () => {
+  const prefix = 'geo.iproyal.com:12321:user:';
+  const passwords = [
+    'literal%40+base_country-ng_session-FirstA11_lifetime-168h_streaming-1_killswitch-1_city-lagos',
+    'literal%40+base_session-Second22_country-ph_lifetime-24h_region-asiapacific_geolocation-14.6,121.0,10,strict',
+    'literal%40+base_lifetime-1h_session-ThirdC33_country-us_state-california_city-losangeles_isp-exampleisp',
+    'literal%40+base_country-us_session-Fourth44_skipipslist-01GRBHR1DMBFRH8VW7APEWD5BQ_lifetime-1h'
+  ];
+  const parsed = parseProxyInputs(passwords.map(password => prefix + password).join(''));
+  assert.deepEqual(parsed.map(row => row.proxyPassword), passwords);
+  assert.deepEqual(parsed.map(row => row.country), ['NG', 'PH', 'US', 'US']);
+  const alternatePort = passwords.slice(0, 2).map(password => prefix.replace('12321', '32325') + password).join('');
+  assert.deepEqual(parseProxyInputs(alternatePort, { protocol: 'socks5' }).map(row => row.proxyPassword), passwords.slice(0, 2));
+  const uri = `socks5://user:${encodeURIComponent(passwords[0])}@geo.iproyal.com:12321`;
+  assert.equal(parseProxyInput(uri).proxyPassword, passwords[0]);
+  const worldwide = ['FirstA11', 'Second22'].map(session => `${prefix}base_session-${session}_lifetime-1h_killswitch-1`);
+  assert.equal(parseProxyInputs(worldwide.join('')).length, 2);
+});
+
+test('advanced concatenation rejects ambiguous credential boundaries and incomplete routes', () => {
+  const prefix = 'geo.iproyal.com:12321:user:';
+  const complete = 'secret_country-ng_session-FirstA11_lifetime-1h_killswitch-1_city-lagos';
+  for (const invalid of [
+    'secret_country-ng_session-FirstA11_lifetime-1h_killswitch-',
+    'secret_country-ng_session-FirstA11_lifetime-1h_killswitch-1_unknown-secret',
+    'secret_country-ng_session-FirstA11_lifetime-1h_city-one_city-two',
+    'secret_country-ng_session-FirstA11_lifetime-1h_geolocation-0,0,1',
+    'secret_country-ng_session-FirstA11_lifetime-1h_city-lagos:other:password',
+    `secret${prefix}also-secret_country-ng_session-FirstA11_lifetime-1h_city-lagos`,
+    'secret_country-ng_lifetime-1h_city-lagos',
+    'secret_country-ng_session-FirstA11_city-lagos'
+  ]) {
+    assert.throws(() => parseProxyInputs(prefix + invalid + prefix + complete), error => /分隔位置不明确/.test(error.message) && !error.message.includes('secret'));
+  }
+  const mixedEndpoint = prefix + complete + prefix.replace('12321', '32325') + complete;
+  assert.throws(() => parseProxyInputs(mixedEndpoint), /分隔位置不明确/);
+});
+
 test('ambiguous concatenation fails without storing another row inside the password or echoing credentials', () => {
   for (const input of [
     'geo.iproyal.com:12321:demo-user:demo-secretgeo.iproyal.com:12321:demo-user:another-secret',

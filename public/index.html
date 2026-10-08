@@ -115,6 +115,35 @@
         <div class="field-grid proxy-auth-fields"><div><label for="proxy-username">代理用户名 <span class="field-optional">可选</span></label><input id="proxy-username" maxlength="255" autocomplete="off" spellcheck="false"></div><div><label for="proxy-password">代理密码 <span class="field-optional">可选</span></label><input id="proxy-password" type="password" maxlength="255" autocomplete="new-password"></div></div>
         <p id="proxy-import-status" class="field-help" role="status" hidden></p>
         <div id="proxy-session-summary" class="proxy-session-summary" role="status" hidden></div>
+        <details id="iproyal-options" class="environment-details iproyal-options" hidden>
+          <summary>IPRoyal 参数设置 <span>从完整代理自动读取；按需修改后应用</span></summary>
+          <p class="field-help">保留供应商原有参数，不会自动开启所有功能。修改线路或会话可能取得新 IP，请重新诊断后保存。</p>
+          <fieldset id="iproyal-options-fields">
+            <div class="field-grid">
+              <div><label for="iproyal-country">代理国家 country</label><input id="iproyal-country" data-proxy-option="country" maxlength="80" placeholder="ng" autocomplete="off" spellcheck="false"><p class="field-help">两位代码；应用单个国家时同步上方目标国家。严格模式需单个国家。</p></div>
+              <div><label for="iproyal-region">大区 region</label><select id="iproyal-region" data-proxy-option="region"><option value="">不指定</option><option value="africa">非洲</option><option value="arabstates">阿拉伯国家</option><option value="asiapacific">亚太</option><option value="europe">欧洲</option><option value="middleeast">中东</option><option value="northamerica">北美</option><option value="southlatinamerica">南美 / 拉丁美洲</option></select></div>
+              <div><label for="iproyal-state">州 state <span class="field-optional">可选</span></label><input id="iproyal-state" data-proxy-option="state" maxlength="80" placeholder="商家提供的州代码" autocomplete="off" spellcheck="false"><p class="field-help">需指定国家。官方指南主要适用于美国；其他国家请以商家支持为准。</p></div>
+              <div><label for="iproyal-city">城市 city <span class="field-optional">可选</span></label><input id="iproyal-city" data-proxy-option="city" maxlength="80" placeholder="商家提供的城市代码" autocomplete="off" spellcheck="false"><p class="field-help">需指定国家，使用供应商提供的代码。</p></div>
+              <div><label for="iproyal-session">会话 session</label><input id="iproyal-session" data-proxy-option="session" type="password" maxlength="8" pattern="[A-Za-z0-9]{8}" placeholder="8 位字母或数字" autocomplete="new-password"><p id="iproyal-session-help" class="field-help">保持同一会话有助于维持出口；更换会话可能更换 IP。</p></div>
+              <div><label for="iproyal-lifetime">会话时长 lifetime</label><input id="iproyal-lifetime" data-proxy-option="lifetime" maxlength="10" placeholder="168h" autocomplete="off" spellcheck="false"><p class="field-help">1 秒至 7 天，单个单位 s / m / h，例如 168h。</p></div>
+            </div>
+            <details class="iproyal-extra"><summary>更多路由与供应商选项</summary>
+              <div class="field-grid">
+                <div><label for="iproyal-isp">运营商 isp <span class="field-optional">需商家权限</span></label><input id="iproyal-isp" data-proxy-option="isp" maxlength="100" placeholder="供应商提供的运营商代码" autocomplete="off" spellcheck="false"><p class="field-help">同时指定国家和城市，并确认商家已为账号开通。</p></div>
+                <div><label for="iproyal-set">国家集合 set <span class="field-optional">可选</span></label><input id="iproyal-set" data-proxy-option="set" maxlength="80" placeholder="供应商提供的集合名称" autocomplete="off" spellcheck="false"><p class="field-help">适用于供应商支持的集合；严格模式不支持随机跨国。</p></div>
+                <div><label for="iproyal-streaming">高端代理池 streaming</label><select id="iproyal-streaming" data-proxy-option="streaming"><option value="">供应商默认 / 不添加</option><option value="1">开启（需有效订阅）</option><option value="0" hidden>保留导入值 0</option></select></div>
+                <div><label for="iproyal-killswitch">离线保护 killswitch</label><select id="iproyal-killswitch" data-proxy-option="killswitch"><option value="">供应商默认 / 不添加</option><option value="1">开启</option><option value="0" hidden>保留导入值 0</option></select><p class="field-help">粘性节点离线时连接失败；严格模式会开启。</p></div>
+                <div><label for="iproyal-forcerandom">随机出口 forcerandom</label><select id="iproyal-forcerandom" data-proxy-option="forcerandom"><option value="">供应商默认 / 不添加</option><option value="1">开启（与严格模式冲突）</option><option value="0" hidden>保留导入值 0</option></select></div>
+                <div><label for="iproyal-skipispstatic">排除静态 ISP skipispstatic</label><select id="iproyal-skipispstatic" data-proxy-option="skipispstatic"><option value="">供应商默认 / 不添加</option><option value="1">开启（需商家开通）</option><option value="0" hidden>保留导入值 0</option></select></div>
+                <div><label for="iproyal-skipipslist">IP 排除列表 skipipslist</label><input id="iproyal-skipipslist" data-proxy-option="skipipslist" maxlength="26" placeholder="商家提供的 26 位列表 ID" autocomplete="off" spellcheck="false"><p class="field-help">需商家开通；填写已有列表 ID。</p></div>
+                <div><label for="iproyal-geolocation">出口定位 geolocation</label><input id="iproyal-geolocation" data-proxy-option="geolocation" maxlength="100" placeholder="纬度,经度,半径[,strict]" autocomplete="off" spellcheck="false"><p class="field-help">代理出口定位，半径至少 10 英里。加 strict 时，范围内无节点即失败。</p></div>
+              </div>
+            </details>
+            <div class="proxy-form-actions"><button id="apply-iproyal-options" class="button button-small button-primary" type="button">应用参数</button><button id="revert-iproyal-options" class="button button-small button-outline" type="button">撤销未应用修改</button></div>
+          </fieldset>
+          <p id="iproyal-options-status" class="field-help" role="status"></p>
+          <p id="iproyal-options-error" class="form-error" role="alert" hidden></p>
+        </details>
         <button id="proxy-import-country" class="button button-small button-outline" type="button" hidden></button>
         <p id="proxy-auth-help" class="field-help">填写代理商提供的凭据，不是 Google 密码。由当前 Windows 用户加密保存，不会放入浏览器命令行或导出记录。</p>
         <label id="clear-proxy-auth-label" class="check-label" for="clear-proxy-auth" hidden><input id="clear-proxy-auth" type="checkbox"><span>清除已保存的代理认证</span></label>

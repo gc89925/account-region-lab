@@ -433,3 +433,71 @@ test('legacy stored IPRoyal auth without killswitch blocks launch until diagnosi
   assert.equal(app.calls.bridges.at(-1).auth.password, `${auth.password}_killswitch-1`);
   assertNoProviderSecret(launched.value, auth);
 });
+
+test('IPRoyal options edit saved auth without returning the password or replacing an untouched session', async t => {
+  const app = await fixture(t), auth = iproyalAuth();
+  const profile = await app.create(iproyalBody(auth));
+  useStableExit(app);
+  const before = await app.saved();
+  const options = {city:'lagos',lifetime:'24h',streaming:false,isp:'dummyprovider'};
+  const requestBody = {profileId:profile.id,proxy:IPROYAL_PROXY,country:'NG',strictIp:true,proxyPassword:'',proxyOptions:options};
+  const diagnosed = await app.request('/api/proxy/diagnose',requestBody);
+  assert.equal(diagnosed.status,200,diagnosed.raw);
+  assert.equal(diagnosed.value.readyToLaunch,true,diagnosed.raw);
+  const effective = app.calls.bridges.at(-1).auth;
+  assert.equal(effective.username,auth.username);
+  assert.ok(effective.password.startsWith(IPROYAL_BASE+'_'));
+  assert.match(effective.password,/_session-SessA001(?:_|$)/);
+  assert.match(effective.password,/_city-lagos(?:_|$)/);
+  assert.match(effective.password,/_isp-dummyprovider(?:_|$)/);
+  assert.match(effective.password,/_lifetime-24h(?:_|$)/);
+  assert.ok(!effective.password.includes('_streaming-'));
+  assert.deepEqual(await app.saved(),before,'Diagnosis may not overwrite the sealed credential');
+  const saved = await app.request(`/api/profiles/${profile.id}`,{proxyPassword:'',proxyOptions:options},'PATCH');
+  assert.equal(saved.status,200,saved.raw);
+  assert.deepEqual(app.calls.seal.at(-1),effective,'Save and diagnosis must use exactly the same modified credentials');
+  assert.equal(saved.value.proxySession.options.city,'lagos');
+  assert.equal(saved.value.proxySession.options.lifetime,'24h');
+  assert.equal(saved.value.proxySession.options.session,undefined);
+  assert.ok(!saved.raw.includes('SessA001'));
+  assertNoProviderSecret(saved.value,auth,effective);
+  const count = app.calls.seal.length;
+  assert.equal((await app.request(`/api/profiles/${profile.id}`,{proxyPassword:'',proxyOptions:options},'PATCH')).status,200);
+  assert.equal(app.calls.seal.length,count,'Reapplying the same options must not mutate credentials');
+});
+
+test('IPRoyal country options and target country must agree, and invalid options cannot mutate stored auth', async t => {
+  const app=await fixture(t),profile=await app.create(iproyalBody());
+  const route=`/api/profiles/${profile.id}`,before=await app.saved();
+  for(const proxyOptions of [{country:'ph'}, {unexpected:'secret-not-to-echo'}, {city:'invalid_city'}, [], null]) {
+    const response=await app.request(route,{proxyPassword:'',proxyOptions},'PATCH');
+    assert.equal(response.status,400,response.raw);
+    assert.ok(!response.raw.includes('secret-not-to-echo'));
+    assert.deepEqual(await app.saved(),before);
+  }
+  const changed=await app.request(route,{country:'PH',proxyPassword:'',proxyOptions:{country:'ph',city:'manila'}},'PATCH');
+  assert.equal(changed.status,200,changed.raw);
+  assert.equal(changed.value.country,'PH');assert.equal(changed.value.proxySession.country,'PH');
+  assert.match(app.calls.seal.at(-1).password,/_session-SessA001(?:_|$)/);
+  assert.match(app.calls.seal.at(-1).password,/_country-ph(?:_|$)/);
+});
+
+test('advanced proxy options require the correct provider and complete auth', async t => {
+  const app=await fixture(t),before=await app.saved();
+  const unrelated=await app.request('/api/proxy/diagnose',{proxy:PROXY,country:'US',proxyUsername:AUTH.username,proxyPassword:AUTH.password,proxyOptions:{city:'lagos'}});
+  assert.equal(unrelated.status,400,unrelated.raw);
+  const absent=await app.request('/api/proxy/diagnose',{proxy:IPROYAL_PROXY,country:'NG',proxyOptions:{city:'lagos'}});
+  assert.equal(absent.status,400,absent.raw);
+  assert.equal(app.calls.bridges.length,0);assert.deepEqual(await app.saved(),before);
+});
+
+test('clearing IPRoyal authentication alone works, while clearing and editing options together is rejected', async t => {
+  const app=await fixture(t),profile=await app.create(iproyalBody());
+  const route=`/api/profiles/${profile.id}`,before=await app.saved();
+  const mixed=await app.request(route,{clearProxyAuth:true,proxyOptions:{city:'lagos'}},'PATCH');
+  assert.equal(mixed.status,400);assert.deepEqual(await app.saved(),before);
+  const cleared=await app.request(route,{clearProxyAuth:true},'PATCH');
+  assert.equal(cleared.status,200,cleared.raw);
+  assert.equal(cleared.value.proxyAuthConfigured,false);assert.equal(cleared.value.proxyUsername,'');
+  assert.equal(cleared.value.proxy,IPROYAL_PROXY);
+});

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { inspectProxySession, prepareProxySession } from '../public/proxy-session.js';
+import { applyProxySessionOptions, getProxySessionOptions, inspectProxySession, prepareProxySession } from '../public/proxy-session.js';
 
 const proxy = 'socks5://geo.iproyal.com:12321';
 const base = 'synthetic-secret%40+base';
@@ -10,7 +10,8 @@ test('session inspection exposes routing metadata without either credential or f
   const session = inspectProxySession(proxy, auth);
   assert.deepEqual({ ...session, sessionFingerprint: null }, {
     provider: 'iproyal', country: 'ID', countries: ['ID'], sessionHint: 'De…12', sessionFingerprint: null,
-    lifetime: '168h', hours: 168, killswitch: false, streaming: true, rotating: false, issues: []
+    lifetime: '168h', hours: 168, killswitch: false, streaming: true, rotating: false,
+    options: { country: 'id', lifetime: '168h', streaming: '1' }, issues: []
   });
   const serialized = JSON.stringify(session);
   for (const secret of [auth.username, base, 'DemoAb12']) assert.ok(!serialized.includes(secret));
@@ -109,4 +110,109 @@ test('adding protection cannot silently exceed the SOCKS5 credential byte limit'
   const suffix = auth.password.slice(base.length);
   const long = { ...auth, password: 'a'.repeat(255 - suffix.length) + suffix };
   assert.throws(() => prepareProxySession(proxy, long, { strictIp: true, country: 'ID' }), /255 字节/);
+});
+
+test('route editing preserves original credentials, order, and untouched session bytes', () => {
+  const original = { ...auth, password: `${auth.password}_city-jakarta_killswitch-1`, marker: 'local-only' };
+  const changed = applyProxySessionOptions(proxy, original, { lifetime: '24h', streaming: false, session: undefined, region: 'asiapacific' });
+  assert.deepEqual(changed, {
+    username: original.username, marker: 'local-only',
+    password: `${base}_country-id_session-DemoAb12_lifetime-24h_city-jakarta_killswitch-1_region-asiapacific`
+  });
+  assert.equal(original.password, `${auth.password}_city-jakarta_killswitch-1`);
+  assert.equal(applyProxySessionOptions(proxy, original, {}).password, original.password);
+  assert.equal(applyProxySessionOptions(proxy, original, { session: undefined }), original);
+  assert.equal(applyProxySessionOptions(proxy, original, { city: 'jakarta' }), original);
+  const specialBase = { ...auth, password: auth.password.replace(base, 'literal_with-dashes%40+') };
+  assert.equal(applyProxySessionOptions(proxy, specialBase, { streaming: false }).password, specialBase.password.replace('_streaming-1', ''));
+});
+
+test('only explicit edits remove or enable parameters, and do not invent a session', () => {
+  const changed = applyProxySessionOptions(proxy, auth, { streaming: null, session: '', killswitch: true, country: 'NG' });
+  assert.equal(changed.password, `${base}_country-ng_lifetime-168h_killswitch-1`);
+  assert.deepEqual(getProxySessionOptions(proxy, changed), { country: 'ng', lifetime: '168h', killswitch: '1' });
+  assert.equal(inspectProxySession(proxy, changed).rotating, true);
+  const emptyRoutes = applyProxySessionOptions(proxy, { username: 'user', password: base }, { city: undefined });
+  assert.equal(emptyRoutes.password, base);
+  assert.throws(() => applyProxySessionOptions(proxy, auth, { session: false }), /文本值/);
+});
+
+test('local editor can access complete route values but public metadata never includes a full session', () => {
+  const original = { username: 'user', password: 'base_country-ng_session-AbCd1234_lifetime-1h_region-africa_city-lagos_isp-exampleisp' };
+  const local = getProxySessionOptions(proxy, original);
+  assert.equal(local.session, 'AbCd1234');
+  assert.equal(local.city, 'lagos');
+  assert.ok(!Object.hasOwn(local, 'username'));
+  assert.ok(!Object.hasOwn(local, 'password'));
+  const metadata = inspectProxySession(proxy, original);
+  assert.equal(metadata.options.city, 'lagos');
+  assert.equal(metadata.options.isp, 'exampleisp');
+  assert.equal(metadata.options.region, 'africa');
+  assert.equal(metadata.options.session, undefined);
+  assert.ok(!JSON.stringify(metadata).includes('AbCd1234'));
+  assert.ok(!JSON.stringify(metadata).includes('base_'));
+});
+
+test('new route syntax is checked even without strict IP and dependencies must be satisfied', () => {
+  for (const updates of [
+    { region: 'not-a-region' }, { city: 'bad_city' }, { city: 'new york' }, { state: 'state_session-NewSess1' },
+    { isp: 'contains space' }, { isp: 'exampleisp' }, { set: 'nikeeu,courir' }, { set: '_session-DemoAb12' },
+    { geolocation: '90.1,0,10' }, { geolocation: '0,180.1,10' }, { geolocation: '0,0,9' },
+    { geolocation: '0,0,10,loose' }, { geolocation: '0,0,Infinity' }, { geolocation: '0,0,10,strict,extra' },
+    { geolocation: '0,0,10_session-Injected' }, { skipipslist: 'not-ulid' },
+    { lifetime: '8d' }, { session: 'short' }, { streaming: '3' }, { country: 'nigeria' }
+  ]) assert.throws(() => applyProxySessionOptions(proxy, auth, updates), { name: 'ProxySessionError' });
+  const withoutCountry = { username: 'user', password: 'base_session-DemoAb12_lifetime-1h' };
+  assert.throws(() => applyProxySessionOptions(proxy, withoutCountry, { city: 'lagos' }), /country/);
+  assert.throws(() => applyProxySessionOptions(proxy, withoutCountry, { state: 'armavir' }), /country/);
+  const withIsp = applyProxySessionOptions(proxy, auth, { city: 'jakarta', isp: 'exampleisp' });
+  assert.equal(getProxySessionOptions(proxy, withIsp).isp, 'exampleisp');
+  assert.throws(() => applyProxySessionOptions(proxy, withIsp, { city: '' }), /country 和 city/);
+  assert.throws(() => applyProxySessionOptions(proxy, withIsp, { country: null }), /country/);
+  const foreignState = applyProxySessionOptions(proxy, auth, { country: 'am', state: 'armavir' });
+  assert.equal(getProxySessionOptions(proxy, foreignState).state, 'armavir');
+});
+
+test('documented optional routes round-trip without automatic permission-gated defaults', () => {
+  const original = { username: 'user', password: 'base_country-us_session-AbCd1234_lifetime-1h' };
+  const updates = {
+    region: 'northamerica', city: 'newyork', state: 'newyork', isp: 'exampleisp',
+    geolocation: '40.68,-74.01,10,strict',
+    skipispstatic: true, streaming: true, set: 'nikena'
+  };
+  const changed = applyProxySessionOptions(proxy, original, updates);
+  const options = getProxySessionOptions(proxy, changed);
+  assert.equal(options.session, 'AbCd1234');
+  for (const [key, value] of Object.entries(updates)) assert.equal(options[key], value === true ? '1' : value);
+  assert.equal(getProxySessionOptions(proxy, original).streaming, undefined);
+  assert.equal(getProxySessionOptions(proxy, original).skipispstatic, undefined);
+  const skipped = applyProxySessionOptions(proxy, original, { skipipslist: '01GRBHR1DMBFRH8VW7APEWD5BQ' });
+  assert.equal(getProxySessionOptions(proxy, skipped).skipipslist, '01GRBHR1DMBFRH8VW7APEWD5BQ');
+  assert.throws(() => prepareProxySession(proxy, changed, { strictIp: true, country: 'US' }), /set 国家集合/);
+  const withoutSet = applyProxySessionOptions(proxy, changed, { set: '', isp: '', skipipslist: '', geolocation: '' });
+  assert.equal(prepareProxySession(proxy, withoutSet, { strictIp: true, country: 'US' }).session.killswitch, true);
+  for (const value of ['-90,-180,10', '90,180,10,strict', '.5,-.5,12.5']) {
+    assert.equal(getProxySessionOptions(proxy, applyProxySessionOptions(proxy, original, { geolocation: value })).geolocation, value);
+  }
+});
+
+test('malformed source routes and unknown patch keys fail closed without exposing values', () => {
+  for (const original of [
+    { ...auth, password: `${auth.password}_unexpected-private-secret` },
+    { ...auth, password: `${auth.password}_city-one_city-two` },
+    { ...auth, password: `${auth.password}_broken` }
+  ]) {
+    for (const action of [() => getProxySessionOptions(proxy, original), () => applyProxySessionOptions(proxy, original, { streaming: false })]) {
+      assert.throws(action, error => error.name === 'ProxySessionError' && !error.message.includes('private-secret') && !error.message.includes(base));
+    }
+  }
+  for (const updates of [null, [], 1, 'country-ng', { username: 'secret' }, { password: 'secret' }, { COUNTRY: 'ng' }, { country: {} }, JSON.parse('{"__proto__":"secret"}')]) {
+    assert.throws(() => applyProxySessionOptions(proxy, auth, updates), error => error.name === 'ProxySessionError' && !error.message.includes('secret'));
+  }
+  assert.deepEqual(getProxySessionOptions('socks5://other.example:1080', auth), {});
+  assert.throws(() => applyProxySessionOptions('socks5://other.example:1080', auth, { country: 'ng' }), /仅适用于/);
+  assert.throws(() => getProxySessionOptions(proxy, null), /完整用户名/);
+  assert.throws(() => applyProxySessionOptions(proxy, null, { country: 'ng' }), /完整用户名/);
+  const huge = { ...auth, password: 'b'.repeat(180) + '_country-id_session-DemoAb12_lifetime-168h' };
+  assert.throws(() => applyProxySessionOptions(proxy, huge, { geolocation: '40.7128000000,-74.0060000000,10,strict' }), /255/);
 });

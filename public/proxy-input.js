@@ -1,3 +1,5 @@
+import { getProxySessionOptions } from './proxy-session.js';
+
 const addressError = '代理地址格式无效。请填写带明确端口的 HTTP / SOCKS5 地址，或 主机:端口:用户名:密码；认证链接中的特殊字符请使用 URL 百分号编码。';
 const credentialError = 'SOCKS5 认证需要完整的用户名和密码，各为 1–255 个 UTF-8 字节，不能包含控制字符。';
 const batchError = '检测到多条代理，但分隔位置不明确。请将每条完整代理放在单独一行后重新粘贴。';
@@ -108,14 +110,19 @@ function splitLine(input) {
     if (/(?:\[[0-9a-f:]+\]|[a-z0-9.-]+\.[a-z0-9.-]+):\d{1,5}:[^:\s]+:/i.test(raw[4])) throw new Error(batchError);
     return [input];
   }
-  if (raw[1].toLowerCase() !== knownResidentialHost || Number(raw[2]) !== 12321) throw new Error(batchError);
+  if (raw[1].toLowerCase() !== knownResidentialHost || ![12321, 32325].includes(Number(raw[2]))) throw new Error(batchError);
   const starts = [0, ...boundaries];
   const entries = starts.map((start, index) => input.slice(start, starts[index + 1] ?? input.length));
-  // IPRoyal exports session rows ending in a complete streaming option. Only
-  // this recognizable boundary is split without newline separators.
+  // Accept complete provider routing suffixes in any documented order. Each
+  // row must independently contain a valid session/lifetime boundary; the next
+  // endpoint must never become part of a password or an optional route value.
   if (!entries.every(entry => {
     const part = rawPattern.exec(entry);
-    return part && part[3] && /(?:^|_)session-[a-z0-9]+_lifetime-\d+[mhd]_streaming-[01]$/i.test(part[4]);
+    if (!part || !part[3] || `${part[1]}:${part[2]}:`.toLowerCase() !== prefix) return false;
+    try {
+      const options = getProxySessionOptions(`socks5://${part[1]}:${part[2]}`, { username: part[3], password: part[4] });
+      return Boolean(options.session && options.lifetime);
+    } catch { return false; }
   })) throw new Error(batchError);
   return entries;
 }
