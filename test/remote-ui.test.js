@@ -32,7 +32,7 @@ test('remote UI keeps five independent environment views, preserves refreshes, a
   }));
   for (const profile of profiles) profile.session.desktopUrl = profile.session.active ? desktopUrl(profile) : null;
   const actions = [], desktopRequests = [], errors = [];
-  const staticFiles = new Map(await Promise.all(['index.html', 'app.js', 'style.css', 'proxy-input.js'].map(async name => [name, await readFile(new URL(`../public/${name}`, import.meta.url))])));
+  const staticFiles = new Map(await Promise.all(['index.html', 'app.js', 'style.css', 'proxy-input.js', 'proxy-session.js'].map(async name => [name, await readFile(new URL(`../public/${name}`, import.meta.url))])));
   const server = createServer(async (request, response) => {
     const url = new URL(request.url, 'http://localhost');
     const json = value => { response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify(value)); };
@@ -162,7 +162,7 @@ test('proxy settings can be replaced after close, pasted residential sessions st
   const patches = [], scanRequests = [], countryRequests = [], errors = [];
   let scan = { state: 'idle', running: false };
   let pendingCatalogResponses = 0;
-  const staticFiles = new Map(await Promise.all(['index.html', 'app.js', 'style.css', 'proxy-input.js'].map(async name => [name, await readFile(new URL(`../public/${name}`, import.meta.url))])));
+  const staticFiles = new Map(await Promise.all(['index.html', 'app.js', 'style.css', 'proxy-input.js', 'proxy-session.js'].map(async name => [name, await readFile(new URL(`../public/${name}`, import.meta.url))])));
   const server = createServer(async (request, response) => {
     const url = new URL(request.url, 'http://localhost');
     const json = value => { response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify(value)); };
@@ -224,6 +224,9 @@ test('proxy settings can be replaced after close, pasted residential sessions st
   assert.equal(await page.locator('#proxy-password').getAttribute('type'), 'password');
   assert.equal(await page.locator('#profile-country').inputValue(), 'IN', 'pasted country must not silently change the existing country');
   assert.match(await page.locator('#proxy-import-status').innerText(), /ID 为印度尼西亚/);
+  assert.match(await page.locator('#proxy-session-summary').innerText(), /168h/);
+  assert.match(await page.locator('#proxy-session-summary').innerText(), /密码的一部分/);
+  assert.match(await page.locator('#proxy-strict-help').innerText(), /首次启用可能分配新出口/);
   const visibleChoices = await page.locator('#proxy-import-choice').innerText();
   assert.ok(!visibleChoices.includes('DemoSecret') && !visibleChoices.includes('demo-user') && !visibleChoices.includes('ExampleOne'), 'choices expose only endpoint, country, and masked session hints');
   await page.locator('#proxy-import-choice').selectOption('2');
@@ -275,5 +278,92 @@ test('proxy settings can be replaced after close, pasted residential sessions st
   assert.match(await page.locator('#scan-progress-detail').innerText(), /出口与 Google 验证 2/);
   await page.locator('#cancel-scan').click();
   await page.waitForFunction(() => !document.querySelector('#catalog-country').disabled);
+  assert.deepEqual(errors, []);
+});
+
+test('proxy diagnosis shows sample changes and saved session details without accepting stale results after edits', async t => {
+  const executablePath = await browserPath();
+  if (!executablePath) { t.skip('A local Chrome/Chromium/Edge executable is needed for the browser UI test'); return; }
+  const session = { provider: 'iproyal', country: 'ID', countries: ['ID'], sessionHint: 'De…12', lifetime: '168h', killswitch: true, issues: [] };
+  const profile = { id: '00000000-0000-4000-8000-000000000019', label: '诊断测试环境', country: 'ID',
+    accountLabel: '', proxy: 'socks5://geo.iproyal.com:12321', proxyUsername: 'demo-user', proxyAuthConfigured: true,
+    proxySession: session, strictIp: true, environment: { engine: 'native' }, launches: [], checks: [], observations: [],
+    locked: false, session: { active: false, managed: true, starting: false } };
+  const requests = [], errors = [];
+  const stableSamples = [1, 2, 3].map(() => ({ ip: '203.0.113.25', country: 'ID', source: 'api.country.is', ok: true }));
+  let diagnosis = { ok: true, readyToLaunch: true, configuredProtocol: 'socks5', probe: stableSamples[0], session,
+    stability: { samples: stableSamples, uniqueIps: 1, stable: true, complete: true }, googleReachable: true, targetCountryMatches: true };
+  let deferNext = false, resolveHeld;
+  const staticFiles = new Map(await Promise.all(['index.html', 'app.js', 'style.css', 'proxy-input.js', 'proxy-session.js'].map(async name => [name, await readFile(new URL(`../public/${name}`, import.meta.url))])));
+  const server = createServer(async (request, response) => {
+    const url = new URL(request.url, 'http://localhost');
+    const json = value => { response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify(value)); };
+    if (url.pathname === '/api/state') return json({ profiles: [profile], token: 'test-token', browser: { name: 'Test Chrome' }, capabilities: { remoteBrowser: true, maxRemoteEnvironments: 5 }, links: {} });
+    if (url.pathname === '/api/proxies/scan') return json({ state: 'idle', running: false });
+    if (url.pathname === '/api/proxy/diagnose') {
+      let body = ''; for await (const chunk of request) body += chunk;
+      requests.push(JSON.parse(body));
+      const result = structuredClone(diagnosis);
+      if (deferNext) { deferNext = false; await new Promise(resolve => { resolveHeld = resolve; }); }
+      return json(result);
+    }
+    const name = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
+    if (staticFiles.has(name)) { response.setHeader('Content-Type', name.endsWith('.js') ? 'text/javascript' : name.endsWith('.css') ? 'text/css' : 'text/html'); return response.end(staticFiles.get(name)); }
+    response.statusCode = 404; response.end();
+  });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  t.after(async () => { resolveHeld?.(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
+  const browser = await chromium.launch({ executablePath, headless: true }); t.after(() => browser.close());
+  const context = await browser.newContext();
+  await context.route('**/*', route => route.request().url().startsWith(origin + '/') ? route.continue() : route.abort());
+  const page = await context.newPage(); page.on('pageerror', error => errors.push(error.message));
+  const expectText = async (selector, text) => page.waitForFunction(({ selector, text }) => document.querySelector(selector)?.textContent.includes(text), { selector, text });
+  const runDiagnosis = async () => { await page.locator('#diagnose-proxy').click(); await expectText('#diagnose-proxy', '重新诊断'); };
+  await page.goto(origin);
+  await page.getByRole('button', { name: '编辑诊断测试环境', exact: true }).click();
+  assert.equal(await page.locator('#proxy-password').inputValue(), '');
+  assert.match(await page.locator('#proxy-session-summary').innerText(), /De…12/);
+  assert.match(await page.locator('#proxy-session-summary').innerText(), /168h/);
+  await runDiagnosis();
+  assert.equal(requests.at(-1).strictIp, true);
+  assert.equal(requests.at(-1).proxyPassword, '');
+  assert.match(await page.locator('#proxy-diagnosis').innerText(), /本次代理检查通过/);
+  assert.equal(await page.locator('.diagnosis-samples li').count(), 3);
+  assert.match(await page.locator('#proxy-diagnosis').innerText(), /不保证后续连接/);
+
+  diagnosis = { ...diagnosis, readyToLaunch: false, stability: { samples: [stableSamples[0], { ...stableSamples[0], ip: '203.0.113.26' }, stableSamples[2]], uniqueIps: 2, stable: false, complete: true } };
+  await runDiagnosis();
+  assert.match(await page.locator('#proxy-diagnosis > strong').getAttribute('class'), /diagnosis-error/);
+  assert.match(await page.locator('#proxy-diagnosis').innerText(), /取得 2 个不同出口 IP/);
+  assert.doesNotMatch(await page.locator('#proxy-diagnosis').innerText(), /本次代理检查通过/);
+  diagnosis = { ...diagnosis, stability: { samples: stableSamples, uniqueIps: 1, stable: true, complete: true, comparedWithPrevious: true, changedSincePrevious: true } };
+  await runDiagnosis();
+  assert.match(await page.locator('#proxy-diagnosis').innerText(), /与上一次相同配置的诊断出口不同/);
+  diagnosis = { ...diagnosis, stability: { samples: stableSamples, uniqueIps: 1, stable: true, complete: true }, binding: { expectedIp: '203.0.113.50', matches: false } };
+  await runDiagnosis();
+  assert.match(await page.locator('#proxy-diagnosis > strong').innerText(), /绑定值不一致/);
+
+  diagnosis = { ...diagnosis, binding: null, stability: { samples: [stableSamples[0], { ok: false, error: '连接超时' }], uniqueIps: 1, stable: false, complete: false } };
+  await runDiagnosis();
+  assert.match(await page.locator('#proxy-diagnosis').innerText(), /连续检查未全部完成/);
+  assert.doesNotMatch(await page.locator('#proxy-diagnosis > strong').innerText(), /出口 IP 发生变化/);
+
+  diagnosis = { ...diagnosis, readyToLaunch: true, stability: { samples: stableSamples, uniqueIps: 1, stable: true, complete: true }, binding: null };
+  for (const selector of ['#profile-proxy', '#proxy-username', '#proxy-password', '#profile-country', '#profile-strict-ip']) {
+    await runDiagnosis();
+    await page.locator(selector).dispatchEvent('change');
+    assert.equal(await page.locator('#proxy-diagnosis').isHidden(), true, `${selector} changes invalidate the displayed result`);
+  }
+  deferNext = true;
+  await page.locator('#diagnose-proxy').click();
+  while (!resolveHeld) await new Promise(resolve => setTimeout(resolve, 10));
+  await page.locator('#profile-strict-ip').uncheck();
+  const completed = page.waitForResponse(response => response.url() === `${origin}/api/proxy/diagnose`);
+  resolveHeld(); await completed;
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  assert.equal(await page.locator('#proxy-diagnosis').isHidden(), true, 'a response for the former strict setting cannot repaint the updated form');
+  await runDiagnosis();
+  assert.equal(requests.at(-1).strictIp, false);
   assert.deepEqual(errors, []);
 });

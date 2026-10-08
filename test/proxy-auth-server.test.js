@@ -47,8 +47,10 @@ async function fixture(t) {
     },
     probe: async proxy => {
       calls.probes.push(proxy);
-      if (control.probe instanceof Error) throw control.probe;
-      return { ...control.probe };
+      const result = typeof control.probe === 'function' ? await control.probe(proxy)
+        : Array.isArray(control.probe) ? control.probe.shift() : control.probe;
+      if (result instanceof Error) throw result;
+      return { ...result };
     },
     diagnose: async (proxy, options) => {
       calls.diagnoses.push({ proxy, options });
@@ -80,7 +82,12 @@ async function fixture(t) {
     return result.value;
   }
   async function saved() { return JSON.parse(await readFile(path.join(dataDir, 'state.json'), 'utf8')); }
-  return { calls, control, request, create, saved };
+  async function replaceStoredAuth(profileId, auth) {
+    const profile = (await saved()).profiles.find(item => item.id === profileId);
+    assert.ok(profile?.proxyAuth?.data);
+    sealed.set(profile.proxyAuth.data, { ...auth });
+  }
+  return { calls, control, request, create, saved, replaceStoredAuth };
 }
 
 function assertNoPassword(value) {
@@ -243,4 +250,186 @@ test('encryption failure aborts create or edit without changing stored profiles'
   const edit = await app.request(`/api/profiles/${profile.id}`, { label: 'Should not change', proxyUsername: AUTH.username, proxyPassword: 'replacement-test-password' }, 'PATCH');
   assert.equal(edit.status, 400);
   assert.deepEqual(await app.saved(), before);
+});
+
+const IPROYAL_PROXY = 'socks5://geo.iproyal.com:12321';
+const IPROYAL_BASE = 'dummy-provider-password';
+const iproyalAuth = (country = 'ng', session = 'SessA001') => ({
+  username: 'dummy-provider-user',
+  password: `${IPROYAL_BASE}_country-${country}_session-${session}_lifetime-168h_streaming-1`,
+});
+const iproyalBody = (auth = iproyalAuth(), country = 'NG') => ({
+  proxy: IPROYAL_PROXY, country, strictIp: true, proxyUsername: auth.username, proxyPassword: auth.password,
+});
+function useStableExit(app, ip = '203.0.113.30', country = 'NG') {
+  app.control.probe = { ip, country };
+  app.control.diagnosis = { ok: true, configuredProtocol: 'socks5', probe: { ip, country } };
+}
+function assertNoProviderSecret(value, ...auths) {
+  const text = JSON.stringify(value);
+  assert.ok(!text.includes(IPROYAL_BASE), 'Responses and saved data must not contain the provider password');
+  for (const auth of auths) assert.ok(!text.includes(auth.password), 'The complete routing password must remain private');
+}
+
+test('strict IPRoyal diagnosis and save reject missing fixed session before opening a bridge', async t => {
+  const app = await fixture(t);
+  const auth = { username: 'dummy-provider-user', password: `${IPROYAL_BASE}_country-ng_lifetime-168h_streaming-1` };
+  const body = iproyalBody(auth);
+  const before = await app.saved();
+  const diagnosis = await app.request('/api/proxy/diagnose', body);
+  assert.equal(diagnosis.status, 400, diagnosis.raw);
+  assert.match(diagnosis.value.error, /session/);
+  assertNoProviderSecret(diagnosis.value, auth);
+  const saved = await app.request('/api/profiles', { label: 'Incomplete fixed session', ...body });
+  assert.equal(saved.status, 400, saved.raw);
+  assert.equal(app.calls.bridges.length, 0);
+  assert.equal(app.calls.diagnoses.length, 0);
+  assert.equal(app.calls.seal.length, 0);
+  assert.deepEqual(await app.saved(), before);
+});
+
+test('IPRoyal diagnosis, save and launch preserve complete country/session parameters and use the same killswitch protection', async t => {
+  const app = await fixture(t);
+  const cases = [['ng', 'SessA001'], ['ng', 'SessB002'], ['ph', 'SessA001']];
+  const fingerprints = [];
+  for (const [country, session] of cases) {
+    const auth = iproyalAuth(country, session), expected = { ...auth, password: `${auth.password}_killswitch-1` };
+    useStableExit(app, '203.0.113.30', country.toUpperCase());
+    const diagnosis = await app.request('/api/proxy/diagnose', iproyalBody(auth, country.toUpperCase()));
+    assert.equal(diagnosis.status, 200, diagnosis.raw);
+    assert.equal(diagnosis.value.readyToLaunch, true, diagnosis.raw);
+    assert.equal(diagnosis.value.session.country, country.toUpperCase());
+    assert.equal(diagnosis.value.session.killswitch, true);
+    assert.equal(diagnosis.value.session.protectionApplied, true);
+    assert.deepEqual(app.calls.bridges.at(-1).auth, expected);
+    assertNoProviderSecret(diagnosis.value, auth, expected);
+    assert.ok(!diagnosis.raw.includes(session), 'The full session value must not be echoed');
+    fingerprints.push(diagnosis.value.session.sessionFingerprint);
+    const profile = await app.create({ label: `${country}-${session}`, ...iproyalBody(auth, country.toUpperCase()) });
+    assert.deepEqual(app.calls.seal.at(-1), expected);
+    assert.equal(profile.proxySession.country, country.toUpperCase());
+    assert.equal(profile.proxySession.killswitch, true);
+    const savedDiagnosis = await app.request('/api/proxy/diagnose', {
+      profileId: profile.id, proxy: IPROYAL_PROXY, country: country.toUpperCase(), proxyPassword: '',
+    });
+    assert.equal(savedDiagnosis.status, 200, savedDiagnosis.raw);
+    assert.equal(savedDiagnosis.value.session.protectionApplied, false);
+    assert.deepEqual(app.calls.bridges.at(-1).auth, expected);
+    const launched = await app.request(`/api/profiles/${profile.id}/launch`, { target: 'gmail' });
+    assert.equal(launched.status, 200, launched.raw);
+    assert.deepEqual(app.calls.bridges.at(-1).auth, expected);
+    assert.ok(app.calls.launches.at(-1).args.includes(`--proxy-server=${LOCAL_PROXY}`));
+    const sealsBefore = app.calls.seal.length;
+    const resaved = await app.request(`/api/profiles/${profile.id}`, iproyalBody(auth, country.toUpperCase()), 'PATCH');
+    assert.equal(resaved.status, 200, resaved.raw);
+    assert.equal(app.calls.seal.length, sealsBefore, 'Equivalent protected credentials should reuse the sealed auth');
+    assert.equal(resaved.value.expectedIp, '203.0.113.30', 'Resaving the same effective credentials must preserve the IP binding');
+    assert.equal(resaved.value.checks.length, launched.value.profile.checks.length);
+    for (const result of [profile, savedDiagnosis.value, launched.value, await app.saved(), app.calls.launches]) {
+      assertNoProviderSecret(result, auth, expected);
+    }
+  }
+  assert.equal(new Set(fingerprints).size, 3, 'Country and session must both distinguish routing configurations');
+  const exported = await app.request('/api/export');
+  assert.equal(exported.status, 200, exported.raw);
+  assert.ok(!exported.raw.includes('203.0.113.30'), 'Neither top-level exit records nor nested stability samples may leak IP addresses in export');
+  assertNoProviderSecret(exported.value);
+});
+
+test('three successful but rotating diagnostic samples are visible and never ready to launch', async t => {
+  const app = await fixture(t);
+  useStableExit(app);
+  app.control.probe = [{ ip: '203.0.113.31', country: 'NG' }, { ip: '203.0.113.32', country: 'NG' }];
+  const diagnosis = await app.request('/api/proxy/diagnose', iproyalBody());
+  assert.equal(diagnosis.status, 200, diagnosis.raw);
+  assert.equal(diagnosis.value.ok, true);
+  assert.equal(diagnosis.value.stability.complete, true);
+  assert.equal(diagnosis.value.stability.stable, false);
+  assert.equal(diagnosis.value.readyToLaunch, false);
+  assert.deepEqual(diagnosis.value.stability.uniqueIps, ['203.0.113.30', '203.0.113.31', '203.0.113.32']);
+  assert.equal(app.calls.probes.length, 2);
+  assert.equal(app.calls.bridges[0].bridge.closed, true);
+});
+
+test('individually stable diagnostic runs still reject a changed IP against the previous fixed baseline', async t => {
+  const app = await fixture(t);
+  useStableExit(app);
+  const first = await app.request('/api/proxy/diagnose', iproyalBody());
+  assert.equal(first.value.readyToLaunch, true, first.raw);
+  assert.equal(first.value.stability.comparedWithPrevious, false);
+  useStableExit(app, '203.0.113.31');
+  const second = await app.request('/api/proxy/diagnose', iproyalBody());
+  assert.equal(second.value.stability.stable, true, second.raw);
+  assert.equal(second.value.stability.changedSincePrevious, true);
+  assert.equal(second.value.stability.previousIp, '203.0.113.30');
+  assert.equal(second.value.readyToLaunch, false);
+  const third = await app.request('/api/proxy/diagnose', iproyalBody());
+  assert.equal(third.value.stability.previousIp, '203.0.113.30');
+  assert.equal(third.value.readyToLaunch, false, 'Rechecking must not silently accept the changed IP');
+});
+
+test('changed routing password or username establishes independent diagnostic history', async t => {
+  const app = await fixture(t);
+  useStableExit(app);
+  const original = iproyalAuth();
+  const first = await app.request('/api/proxy/diagnose', iproyalBody(original));
+  assert.equal(first.value.readyToLaunch, true, first.raw);
+  useStableExit(app, '203.0.113.31');
+  const changedSession = iproyalAuth('ng', 'SessB002');
+  const second = await app.request('/api/proxy/diagnose', iproyalBody(changedSession));
+  assert.equal(second.value.stability.comparedWithPrevious, false, second.raw);
+  assert.equal(second.value.readyToLaunch, true);
+  useStableExit(app, '203.0.113.32');
+  const changedUsername = { ...changedSession, username: 'other-dummy-provider-user' };
+  const third = await app.request('/api/proxy/diagnose', iproyalBody(changedUsername));
+  assert.equal(third.value.stability.comparedWithPrevious, false, third.raw);
+  assert.equal(third.value.readyToLaunch, true);
+  for (const result of [first, second, third]) assertNoProviderSecret(result.value, original, changedSession, changedUsername);
+});
+
+test('launch also checks all three IPRoyal samples and refuses a rotating exit without binding an IP', async t => {
+  const app = await fixture(t);
+  const profile = await app.create(iproyalBody());
+  let requests = 0;
+  app.control.probe = async () => ({ ip: `203.0.113.${30 + requests++}`, country: 'NG' });
+  const launched = await app.request(`/api/profiles/${profile.id}/launch`, { target: 'gmail' });
+  assert.equal(launched.status, 400, launched.raw);
+  assert.match(launched.value.error, /IP 变化|采样/);
+  assert.equal(requests, 3);
+  assert.equal(app.calls.launches.length, 0);
+  const saved = (await app.saved()).profiles.find(item => item.id === profile.id);
+  assert.equal(saved.expectedIp, null);
+  assert.equal(saved.cycleStartedAt, null);
+  assert.deepEqual(saved.launches, []);
+  assert.equal(saved.checks.at(-1).stability.stable, false);
+});
+
+test('legacy stored IPRoyal auth without killswitch blocks launch until diagnosis and explicit save use the protected auth', async t => {
+  const app = await fixture(t);
+  const auth = iproyalAuth();
+  const profile = await app.create(iproyalBody(auth));
+  // Simulate the opaque vault entry from a version that saved unprotected auth.
+  await app.replaceStoredAuth(profile.id, auth);
+  useStableExit(app);
+  const rejected = await app.request(`/api/profiles/${profile.id}/launch`, { target: 'gmail' });
+  assert.equal(rejected.status, 400, rejected.raw);
+  assert.match(rejected.value.error, /重新诊断并保存/);
+  assert.equal(app.calls.bridges.length, 0, 'Connection must not silently change the persisted authentication');
+  assert.equal(app.calls.probes.length, 0);
+  assert.equal(app.calls.launches.length, 0);
+  const diagnosis = await app.request('/api/proxy/diagnose', {
+    profileId: profile.id, proxy: IPROYAL_PROXY, country: 'NG', proxyPassword: '',
+  });
+  assert.equal(diagnosis.status, 200, diagnosis.raw);
+  assert.equal(diagnosis.value.readyToLaunch, true);
+  assert.equal(diagnosis.value.session.protectionApplied, true);
+  assert.equal(app.calls.seal.length, 1, 'Diagnosis must not mutate the saved credential envelope');
+  const saved = await app.request(`/api/profiles/${profile.id}`, { proxyPassword: '' }, 'PATCH');
+  assert.equal(saved.status, 200, saved.raw);
+  assert.equal(app.calls.seal.length, 2);
+  assert.equal(app.calls.seal.at(-1).password, `${auth.password}_killswitch-1`);
+  const launched = await app.request(`/api/profiles/${profile.id}/launch`, { target: 'gmail' });
+  assert.equal(launched.status, 200, launched.raw);
+  assert.equal(app.calls.bridges.at(-1).auth.password, `${auth.password}_killswitch-1`);
+  assertNoProviderSecret(launched.value, auth);
 });

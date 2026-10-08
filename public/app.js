@@ -1,4 +1,5 @@
 import { parseProxyInputs, applyParsedProxyInput } from './proxy-input.js';
+import { inspectProxySession } from './proxy-session.js';
 
 const $ = (selector) => document.querySelector(selector);
 const countryNames = { IN: '印度', NG: '尼日利亚', CN: '中国', US: '美国', GB: '英国', JP: '日本', KR: '韩国', SG: '新加坡', DE: '德国', CA: '加拿大', AU: '澳大利亚' };
@@ -555,6 +556,7 @@ function openProfileDialog(profile = null, defaults = {}) {
       : `填写代理商提供的凭据，不是 Google 密码。${remoteBrowserEnabled() ? '凭据保存在服务器上，' : '由当前 Windows 用户加密保存，'}不会放入浏览器命令行或导出记录。`;
   resetProxyDiagnosis();
   $('#profile-strict-ip').checked = values.strictIp !== false;
+  updateProxySessionSummary();
   const environment = values.environment || {};
   const localeDefaults = environmentDefaults[$('#profile-country').value] || { locale: 'en-US', timezoneId: 'UTC' };
   $('#environment-engine').value = remoteBrowserEnabled() ? 'native' : environment.engine || 'native';
@@ -627,6 +629,46 @@ function resetProxyDiagnosis() {
   $('#proxy-diagnosis').replaceChildren();
   $('#diagnose-proxy').disabled = false;
   $('#diagnose-proxy').textContent = '诊断代理';
+  updateProxySessionSummary();
+}
+
+function currentProxySession() {
+  const proxy = $('#profile-proxy').value.trim();
+  const username = $('#proxy-username').value;
+  const password = $('#proxy-password').value;
+  const profile = state.profiles.find(item => item.id === editingProfileId);
+  if (!$('#clear-proxy-auth').checked && !password && profile?.proxyAuthConfigured
+      && profile.proxy === proxy && profile.proxyUsername === username && profile.proxySession) return profile.proxySession;
+  try {
+    return inspectProxySession(proxy, $('#clear-proxy-auth').checked ? null : { username, password });
+  } catch { return null; }
+}
+
+function proxySessionDetails(session, { preparing = false } = {}) {
+  const countries = Array.isArray(session?.countries) ? session.countries : session?.country ? [session.country] : [];
+  return [
+    `国家：${countries.length ? countries.map(countryLabel).join('、') : '未指定'}`,
+    `会话：${session?.sessionHint || '未指定（可能轮换）'}`,
+    `时长：${session?.lifetime || '未指定'}`,
+    `离线保护：${session?.killswitch ? '已启用 killswitch' : preparing ? '诊断 / 保存时启用 killswitch' : '未启用'}`
+  ].join(' · ');
+}
+
+function updateProxySessionSummary() {
+  const panel = $('#proxy-session-summary');
+  if (!panel) return;
+  const session = currentProxySession();
+  const strict = $('#profile-strict-ip').checked;
+  panel.replaceChildren();
+  panel.hidden = session?.provider !== 'iproyal';
+  $('#proxy-strict-help').textContent = session?.provider === 'iproyal'
+    ? '首次检查通过并启动后绑定出口 IP。严格模式在诊断和保存时为完整的 IPRoyal 粘性会话启用 killswitch：原节点离线时连接失败，避免服务商静默换 IP；首次启用可能分配新出口，请重新诊断后保存。缺少国家、有效会话或时长时需补齐。会话有时限，这不等于永久固定 IP。'
+    : '首次出口检查通过并启动浏览器后绑定实际出口；之后检查或启动时发现 IP 变化即拦截。关闭后仍会核对出口国家。本选项不能把轮换代理变成固定代理。';
+  if (panel.hidden) return;
+  panel.append(element('strong', '', 'IPRoyal 会话参数'), element('p', '', proxySessionDetails(session, { preparing: strict })));
+  panel.append(element('p', 'field-help', 'country、session、lifetime、killswitch 等后缀都是代理密码的一部分；完整内容保存在密码框中，不能只保留基础密码。这里仅显示脱敏摘要。'));
+  const issues = Array.isArray(session.issues) ? session.issues : [];
+  if (issues.length) panel.append(element('p', 'diagnosis-warning', issues.map(issue => issue.message).join(' ')));
 }
 
 function resetProxyImport() {
@@ -730,9 +772,18 @@ function renderProxyDiagnosis(result, input) {
   panel.replaceChildren();
   const error = typeof result.error === 'object' ? result.error : { message: result.error };
   const stageNames = { setup: '配置', proxy_dns: '代理地址解析', proxy_connect: '连接代理端口', connection: '连接代理端口', proxy_protocol: '代理协议握手', protocol: '代理协议握手', proxy_auth: '代理认证', authentication: '代理认证', target_dns: '目标域名解析', target_connect: '代理连接目标', tls: 'HTTPS 证书握手', probe_service: '出口查询', timeout: '请求超时' };
-  const passed = result.ok === true && result.googleReachable === true && result.targetCountryMatches !== false;
-  const title = passed ? '代理诊断通过' : result.ok ? '代理已连通，仍需处理以下检查' : `诊断停在：${stageNames[error?.stage] || '连接代理'}`;
-  panel.append(element('strong', passed ? 'diagnosis-success' : 'diagnosis-warning', title));
+  const stability = result.stability;
+  const samples = Array.isArray(stability?.samples) ? stability.samples : [];
+  const sampledIps = new Set(samples.filter(sample => sample.ok !== false && sample.ip).map(sample => sample.ip));
+  const fluctuating = stability?.stable === false && stability?.complete !== false || stability?.changedSincePrevious === true || sampledIps.size > 1;
+  const bindingMismatch = result.binding?.matches === false;
+  const passed = (typeof result.readyToLaunch === 'boolean' ? result.readyToLaunch
+    : result.ok === true && result.googleReachable === true && result.targetCountryMatches !== false)
+    && !fluctuating && !bindingMismatch && stability?.complete !== false;
+  const title = fluctuating ? '出口 IP 发生变化，尚未通过稳定性检查'
+    : bindingMismatch ? '出口 IP 与环境绑定值不一致'
+      : passed ? '本次代理检查通过' : result.ok ? '代理已连通，仍需处理以下检查' : `诊断停在：${stageNames[error?.stage] || '连接代理'}`;
+  panel.append(element('strong', passed ? 'diagnosis-success' : fluctuating || bindingMismatch ? 'diagnosis-error' : 'diagnosis-warning', title));
   const steps = element('ul', 'diagnosis-steps');
   const add = (label, status, detail) => {
     const row = element('li', `diagnosis-${status}`);
@@ -744,11 +795,28 @@ function renderProxyDiagnosis(result, input) {
     : error?.message || '代理连接未通过，后续检查未执行。');
   const probe = result.probe;
   add('实际出口', probe?.ip ? 'success' : 'pending', probe?.ip ? `${probe.ip} · ${countryLabel(probe.country)}` : '尚未取得出口信息');
+  if (result.session?.provider === 'iproyal') add('会话参数', result.session.issues?.length ? 'error' : 'success', proxySessionDetails(result.session));
+  if (stability) {
+    const detail = fluctuating
+      ? `${sampledIps.size > 1 ? `本次取得 ${sampledIps.size} 个不同出口 IP。` : ''}${stability.changedSincePrevious ? '与上一次相同配置的诊断出口不同。' : ''}请检查粘性会话参数或联系供应商确认线路。`
+      : stability.complete === false ? '连续检查未全部完成，无法确认本次连接是否稳定。'
+        : `本次 ${samples.length} 次独立连接取得相同出口${stability.comparedWithPrevious ? '，并与上次诊断一致' : ''}；仅代表当前采样。`;
+    add('出口稳定性', fluctuating ? 'error' : stability.complete === false ? 'pending' : 'success', detail);
+  }
+  if (result.binding?.expectedIp) add('已绑定出口', bindingMismatch ? 'error' : result.binding.matches === true ? 'success' : 'pending', `${result.binding.expectedIp}${bindingMismatch ? ' · 当前出口不匹配' : result.binding.matches === true ? ' · 当前出口一致' : ' · 尚未完成比较'}`);
   add('目标国家', result.targetCountryMatches === true ? 'success' : result.targetCountryMatches === false ? 'error' : 'pending', result.targetCountryMatches === true
     ? `与${countryName(input.country)}一致` : result.targetCountryMatches === false ? `与目标${countryName(input.country)}不一致` : '等待出口检查');
   add('Google 登录页', result.googleReachable === true ? 'success' : result.googleReachable === false ? 'error' : 'pending', result.googleReachable === true
     ? 'HTTPS 请求通过；登录由你在独立浏览器中完成' : result.googleReachable === false ? result.googleError || 'Google 登录页未连通' : '尚未检查');
   panel.append(steps);
+  if (samples.length) {
+    const list = element('ol', 'diagnosis-samples');
+    samples.forEach((sample, index) => {
+      const sampleError = typeof sample.error === 'object' ? sample.error?.message : sample.error;
+      list.append(element('li', sample.ok === false ? 'diagnosis-error' : '', `${index + 1}. ${sample.ok !== false && sample.ip ? `${sample.ip} · ${countryLabel(sample.country)}` : sampleError || '检查未完成'}${sample.source ? ` · ${sample.source}` : ''}`));
+    });
+    panel.append(list);
+  }
   if (error?.code === 'proxy_auth_required') {
     panel.append(element('p', 'diagnosis-warning', '请在上方填写代理商提供的用户名和密码，再点“重新诊断”。如果服务商使用 IP 白名单，请先完成该授权。'));
     if (!$('#proxy-username').disabled) panel.append(actionButton('填写代理认证', 'button button-small button-outline', () => $('#proxy-username').focus()));
@@ -765,7 +833,7 @@ function renderProxyDiagnosis(result, input) {
       } catch { toast('无法调整此地址，请在代理栏手动修改协议。', 'error'); }
     }));
   }
-  panel.append(element('p', 'field-help', passed ? '可以保存环境，再点击卡片中的“登录 Google 账号”。启动前还会复查出口。' : '本次仅诊断网络，未保存配置或启动浏览器。'));
+  panel.append(element('p', 'field-help', passed ? '可以保存环境，再点击卡片中的“登录 Google 账号”。启动前还会复查出口；本次通过不保证后续连接或整个会话周期内 IP 不变。' : '本次仅诊断网络，未保存配置或启动浏览器。请处理上述问题后重新诊断。'));
 }
 
 async function diagnoseProxy() {
@@ -775,7 +843,7 @@ async function diagnoseProxy() {
   const profile = state.profiles.find((item) => item.id === editingProfileId);
   const input = { proxy, country: $('#profile-country').value.trim().toUpperCase(),
     proxyUsername: $('#proxy-username').value, proxyPassword: $('#proxy-password').value,
-    clearProxyAuth: $('#clear-proxy-auth').checked };
+    clearProxyAuth: $('#clear-proxy-auth').checked, strictIp: $('#profile-strict-ip').checked };
   if (profile && profile.proxy === proxy) input.profileId = profile.id;
   const sequence = ++diagnosisSequence;
   const button = $('#diagnose-proxy');
@@ -783,7 +851,7 @@ async function diagnoseProxy() {
   button.textContent = '正在诊断…';
   const panel = $('#proxy-diagnosis');
   panel.hidden = false;
-  panel.replaceChildren(element('p', '', '正在检查代理协议、认证、出口国家和 Google 登录页。必要时会验证另一种协议；最多等待 100 秒。'));
+  panel.replaceChildren(element('p', '', '正在检查代理认证、会话参数、三次独立连接的出口与 Google 登录页。检查期间修改配置会使本次结果失效；最多等待 100 秒。'));
   try {
     const result = await api('/api/proxy/diagnose', { method: 'POST', body: JSON.stringify(input) });
     if (sequence === diagnosisSequence) renderProxyDiagnosis(result, input);
@@ -1250,7 +1318,9 @@ function updateCountryDefaults() {
 }
 $('#profile-country').addEventListener('input', updateCountryDefaults);
 $('#profile-country').addEventListener('change', updateCountryDefaults);
-for (const id of ['profile-proxy', 'profile-country', 'proxy-username', 'proxy-password']) document.getElementById(id).addEventListener('input', resetProxyDiagnosis);
+for (const id of ['profile-proxy', 'profile-country', 'proxy-username', 'proxy-password', 'profile-strict-ip']) {
+  for (const event of ['input', 'change']) document.getElementById(id).addEventListener(event, resetProxyDiagnosis);
+}
 for (const id of ['proxy-username', 'proxy-password']) document.getElementById(id).addEventListener('input', event => {
   if (event.currentTarget.value) $('#clear-proxy-auth').checked = false;
 });
@@ -1270,7 +1340,7 @@ $('#profile-proxy').addEventListener('input', (event) => {
   resetProxyImport();
   if (field.value.includes('@') || /^(?:[^:/\s]+|\[[^\]]+\]):\d+:[^:]+:/.test(field.value)) importProxyCredentials(field.value);
 });
-$('#profile-dialog').addEventListener('close', () => { resetProxyImport(); $('#proxy-password').value = ''; });
+$('#profile-dialog').addEventListener('close', () => { resetProxyImport(); $('#proxy-password').value = ''; resetProxyDiagnosis(); });
 $('#clear-profile-proxy').addEventListener('click', clearProfileProxy);
 $('#close-profile-for-edit').addEventListener('click', closeProfileForEdit);
 $('#proxy-import-choice').addEventListener('change', event => applyImportedProxy(Number(event.currentTarget.value)));

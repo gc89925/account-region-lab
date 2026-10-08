@@ -12,9 +12,11 @@ import { createPublicProxyCatalog } from './lib/public-proxies.js';
 import { createCredentialVault, validateProxyAuth } from './lib/proxy-auth.js';
 import { createSocksBridge } from './lib/socks-bridge.js';
 import { createRemoteLauncher } from './lib/remote-browser.js';
+import { inspectProxySession, prepareProxySession } from './public/proxy-session.js';
+import { sampleProxyStability, createStabilityHistory } from './lib/proxy-stability.js';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
-const VERSION = '0.6.0';
+const VERSION = '0.6.1';
 
 function respond(res, status, data) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -74,7 +76,11 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
   const launching = new Set();
   const bridges = new Map();
   const bridgeStarts = new Map();
+  const sessionSummaries = new Map();
+  const stabilityHistory = createStabilityHistory();
+  const diagnosingProfiles = new Set();
   let diagnosticsActive = 0;
+  const diagnosisKey = (proxy,auth,country,strictIp) => createHash('sha256').update(token).update(JSON.stringify([proxy,auth?.username,auth?.password,country,strictIp])).digest('hex');
   const save = () => atomicSave(file, state);
   const sessionActive = id => remoteMode ? remote.isActive(id) : managed.isActive(id);
   const settingsLocked = profile => sessionActive(profile.id) || launching.has(profile.id) ||
@@ -83,7 +89,7 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
     const desktop = remoteMode ? remote.getDesktop?.(id) : null;
     return desktop && Number.isInteger(desktop.port) && desktop.port >= 6101 && desktop.port <= 6105 && /^[a-f0-9]{32}$/.test(desktop.generation) ? desktop : null;
   };
-  const displayProfile = p => { const { proxyAuth, ...visible } = withStats(p); const desktop = desktopFor(p.id); return ({ ...visible, proxyAuthConfigured: !!proxyAuth, locked: settingsLocked(p), session: { active: sessionActive(p.id), managed: remoteMode || p.environment.engine === 'managed', ...(remoteMode ? {
+  const displayProfile = p => { const { proxyAuth, proxySession: _storedSummary, ...visible } = withStats(p); const desktop = desktopFor(p.id); return ({ ...visible, proxySession: sessionSummaries.get(p.id)?.summary || null, proxyAuthConfigured: !!proxyAuth, locked: settingsLocked(p), session: { active: sessionActive(p.id), managed: remoteMode || p.environment.engine === 'managed', ...(remoteMode ? {
     starting: !desktop && launching.has(p.id),
     desktopUrl: desktop ? `/desktop/${p.id}/${desktop.generation}/vnc.html?autoconnect=true&resize=scale&path=desktop/${p.id}/${desktop.generation}/websockify` : null,
   } : {}) }, network: {
@@ -91,7 +97,13 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
     uniqueIps: new Set(p.checks.filter(c => c.ip).map(c => c.ip)).size,
     lastCheckedAt: p.checks.at(-1)?.at || null,
   } }); };
-  const snapshot = () => {
+  const snapshot = async () => {
+    await Promise.all(state.profiles.map(async p => {
+      const cached = sessionSummaries.get(p.id);
+      if (cached?.envelope === p.proxyAuth && cached?.proxy === p.proxy) return;
+      try { sessionSummaries.set(p.id, { envelope:p.proxyAuth, proxy:p.proxy, summary:inspectProxySession(p.proxy, p.proxyAuth ? await vault.open(p.proxyAuth) : null) }); }
+      catch { sessionSummaries.set(p.id, { envelope:p.proxyAuth, proxy:p.proxy, summary:null }); }
+    }));
     const profiles = state.profiles.map(displayProfile);
     return { version: VERSION, profiles, browser, token, links: LINKS, ...(remoteMode ? {remoteSessions:{limit:maxRemoteEnvironments, active:profiles.filter(p => p.session.desktopUrl).length, starting:profiles.filter(p => p.session.starting).length}} : {}), capabilities: { remoteBrowser:remoteMode, ...(remoteMode ? {maxRemoteEnvironments} : {}), managed: !remoteMode, devices: 'manual-review', catalog: 'VPN Gate metadata only' } };
   };
@@ -112,24 +124,26 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
     return validateProxyAuth(username, password);
   }
 
-  async function saveAuth(body, profile, proxy) {
+  async function saveAuth(body, profile, proxy, settings) {
     // Clearing an expired endpoint must also forget its saved credentials.
     if (!proxy) return { proxyUsername: '', proxyAuth: null };
-    if (!Object.hasOwn(body, 'proxyUsername') && !Object.hasOwn(body, 'proxyPassword') && body.clearProxyAuth !== true) {
-      if (profile?.proxyAuth && proxy !== profile.proxy) throw new Error('代理地址已改变，请重新填写或清除认证。');
-      return { proxyUsername: profile?.proxyUsername || '', proxyAuth: profile?.proxyAuth || null };
-    }
     const auth = await readAuth(body, profile, proxy);
-    if (!auth) return { proxyUsername: '', proxyAuth: null };
-    if (!body.proxyPassword && profile?.proxyAuth) return { proxyUsername: profile.proxyUsername, proxyAuth: profile.proxyAuth };
-    return { proxyUsername: auth.username, proxyAuth: await vault.seal(auth) };
+    const prepared = prepareProxySession(proxy, auth, settings);
+    if (!prepared.auth) return { proxyUsername: '', proxyAuth: null };
+    const effective = prepared.auth;
+    const previous = profile?.proxyAuth ? await vault.open(profile.proxyAuth) : null;
+    const unchanged = previous && previous.username === effective.username && previous.password === effective.password;
+    return { proxyUsername: effective.username, proxyAuth: unchanged ? profile.proxyAuth : await vault.seal(effective) };
   }
 
   async function connection(profile) {
     if (!profile.proxyAuth) return { proxy: profile.proxy };
     if (bridges.has(profile.id)) return bridges.get(profile.id);
     if (!bridgeStarts.has(profile.id)) bridgeStarts.set(profile.id, (async () => {
-      const bridge = await createBridge(profile.proxy, await vault.open(profile.proxyAuth), {port:profile.proxyBridgePort || 0});
+      const auth = await vault.open(profile.proxyAuth);
+      const prepared = prepareProxySession(profile.proxy, auth, profile);
+      if (prepared.changed) throw new Error('此 IPRoyal 环境尚未启用固定会话断线保护。请关闭环境、重新诊断并保存代理配置，再启动浏览器。');
+      const bridge = await createBridge(profile.proxy, auth, {port:profile.proxyBridgePort || 0});
       bridges.set(profile.id, bridge);
       // Chrome may keep the original proxy flags in an existing process.
       // Reuse this loopback port after service restart for that same profile.
@@ -157,10 +171,18 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
       if (!isIP(result.ip)) throw new Error('出口检测没有返回有效 IP，已拦截启动。');
       const actual = countryCode(result.country);
       const changedIp = profile.strictIp && profile.expectedIp && profile.expectedIp !== result.ip;
-      const ok = actual === profile.country && !changedIp;
+      let ok = actual === profile.country && !changedIp;
+      let stability;
+      if (ok && profile.strictIp && new URL(profile.proxy).hostname === 'geo.iproyal.com') {
+        stability = await sampleProxyStability(network.proxy, {first:result,probe});
+        const auth = profile.proxyAuth ? await vault.open(profile.proxyAuth) : null;
+        Object.assign(stability, stabilityHistory.compare(diagnosisKey(profile.proxy,auth,profile.country,profile.strictIp),stability));
+        ok = stability.stable && stability.complete && !stability.changedSincePrevious;
+      }
       record = { at: new Date().toISOString(), ok, ip: result.ip, country: actual,
         ...(Number.isFinite(result.latencyMs) ? { latencyMs: result.latencyMs } : {}),
-        ...(ok ? {} : { error: changedIp ? '出口 IP 与该环境固定绑定值不同，已拦截启动。请恢复原线路，或新建环境。' : `出口地区为 ${actual}，目标为 ${profile.country}。已拦截启动。` }) };
+        ...(stability ? {stability} : {}),
+        ...(ok ? {} : { error: changedIp ? '出口 IP 与该环境固定绑定值不同，已拦截启动。请关闭环境后检查线路，确认更换代理时重新保存配置。' : stability ? '连续出口检查发现 IP 变化或采样未完成，已拦截启动。请核对完整固定会话参数。' : `出口地区为 ${actual}，目标为 ${profile.country}。已拦截启动。` }) };
       if (ok) {
         const destination = await destinationProbe(network.proxy, targetUrl(profile, target));
         Object.assign(record, {target, targetReachable:destination.ok === true, targetHttpStatus:destination.httpStatus ?? null});
@@ -202,7 +224,7 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
         return respond(res,200,{port:desktop.port});
       }
       if (req.method === 'GET' && url.pathname === '/api/health') return respond(res, 200, { app: 'account-region-lab', version: VERSION, ready: true, workspaceId, instanceId });
-      if (req.method === 'GET' && url.pathname === '/api/state') return respond(res, 200, snapshot());
+      if (req.method === 'GET' && url.pathname === '/api/state') return respond(res, 200, await snapshot());
       if (req.method === 'GET' && url.pathname === '/api/proxies') return respond(res,200,await publicProxies.list((url.searchParams.get('country') || 'ALL').toUpperCase()));
       if (req.method === 'GET' && url.pathname === '/api/proxies/scan') return respond(res,200,publicProxies.scanStatus());
       if (req.method === 'GET' && url.pathname === '/api/catalog') {
@@ -210,7 +232,7 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
         return respond(res, 200, await catalog.list(requested === 'ALL' ? 'ALL' : countryCode(requested)));
       }
       if (req.method === 'GET' && url.pathname === '/api/export') {
-        const profiles = state.profiles.map(({ proxy, proxyAuth, proxyUsername, expectedIp, accountLabel, checks, ...p }) => ({ ...p, proxyConfigured: !!proxy, checks: checks.map(({ ip, ...c }) => c) }));
+        const profiles = state.profiles.map(({ proxy, proxyAuth, proxyUsername, expectedIp, accountLabel, checks, ...p }) => ({ ...p, proxyConfigured: !!proxy, checks: checks.map(({ ip, stability, ...c }) => ({...c,...(stability ? {stability:{stable:stability.stable,complete:stability.complete,uniqueIpCount:stability.uniqueIps.length}} : {})})) }));
         res.setHeader('Content-Disposition', 'attachment; filename="account-region-observations.json"');
         return respond(res, 200, { exportedAt: new Date().toISOString(), note: '人工观察记录，不构成 Google 地区判定或改区资格证明。代理地址和出口 IP 已移除；备注由用户提供。', profiles });
       }
@@ -232,27 +254,42 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
           const country = countryCode(body.country);
           const existing = body.profileId ? state.profiles.find(p => p.id === body.profileId) : null;
           if (body.profileId && !existing) throw new Error('环境不存在，请刷新页面。');
+          if (body.strictIp !== undefined && typeof body.strictIp !== 'boolean') throw new Error('固定出口选项必须是布尔值。');
+          if (existing && (busy.has(existing.id) || diagnosingProfiles.has(existing.id))) return respond(res,409,{error:'这个环境正在检测或修改，请稍后再试。'});
+          if (existing) diagnosingProfiles.add(existing.id);
           diagnosticsActive++;
           let temporary;
           try {
-            const auth = await readAuth(body, existing, proxy);
+            const strictIp = body.strictIp ?? existing?.strictIp ?? true;
+            const prepared = prepareProxySession(proxy, await readAuth(body, existing, proxy), {strictIp,country});
+            const auth = prepared.auth;
             if (auth) temporary = await createBridge(proxy, auth);
             const tested = temporary?.proxy || proxy;
             const result = await diagnose(tested, {tryAlternateProtocol: !auth});
+            result.session = {...prepared.session, protectionApplied:prepared.changed};
             result.configuredProtocol = new URL(proxy).protocol.slice(0,-1);
             if (!result.ok && temporary?.lastError) result.error = probeDetail({diagnostic:result.error}, temporary);
             if (result.ok) {
-              result.targetCountryMatches = result.probe.country === country;
+              result.stability = await sampleProxyStability(tested, {first:result.probe,probe});
+              const historyKey = diagnosisKey(proxy,auth,country,strictIp);
+              Object.assign(result.stability, stabilityHistory.compare(historyKey,result.stability));
+              result.targetCountryMatches = result.stability.samples.every(sample => sample.ok && sample.country === country);
+              const savedAuth = existing?.proxyAuth ? await vault.open(existing.proxyAuth) : null;
+              const sameConfiguration = existing?.proxy === proxy && savedAuth?.username === auth?.username && savedAuth?.password === auth?.password;
+              result.binding = {expectedIp:strictIp && sameConfiguration ? existing.expectedIp : null};
+              result.binding.matches = !result.binding.expectedIp || result.stability.samples.every(sample => sample.ok && sample.ip === result.binding.expectedIp);
               result.googleReachable = await google(tested);
               if (!result.googleReachable) result.googleError = '出口检测通过，但 Google 登录页 HTTPS 请求未通过。';
             }
+            result.readyToLaunch = result.ok === true && result.googleReachable === true && result.targetCountryMatches === true && result.stability?.complete === true && result.stability?.stable === true && !result.stability.changedSincePrevious && result.binding?.matches !== false;
             return respond(res,200,result);
-          } finally { await temporary?.close(); diagnosticsActive--; }
+          } finally { await temporary?.close(); diagnosticsActive--; if (existing) diagnosingProfiles.delete(existing.id); }
         }
         if (req.method === 'POST' && url.pathname === '/api/profiles') {
           if (state.profiles.length >= 100) throw new Error('第一版最多支持 100 个环境。');
           const p = makeProfile(effectiveInput(body));
-          Object.assign(p, await saveAuth(body, null, p.proxy));
+          Object.assign(p, await saveAuth(body, null, p.proxy, p));
+          sessionSummaries.set(p.id,{envelope:p.proxyAuth,proxy:p.proxy,summary:inspectProxySession(p.proxy,p.proxyAuth ? await vault.open(p.proxyAuth) : null)});
           state.profiles.push(p); save();
           return respond(res, 201, displayProfile(p));
         }
@@ -260,11 +297,11 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
         if (!match) return respond(res, 404, { error: '接口不存在。' });
         const profile = state.profiles.find(p => p.id === match[1]);
         if (!profile) return respond(res, 404, { error: '环境不存在。' });
-        if (busy.has(profile.id)) return respond(res, 409, { error: '这个环境正在检测或启动，请稍后再试。' });
+        if (busy.has(profile.id) || diagnosingProfiles.has(profile.id)) return respond(res, 409, { error: '这个环境正在检测或启动，请稍后再试。' });
         lockedId = profile.id; busy.add(lockedId);
         if (req.method === 'PATCH' && !match[2]) {
           const updated = profileInput(effectiveInput({ ...profile, ...body }));
-          const authentication = await saveAuth(body, profile, updated.proxy);
+          const authentication = await saveAuth(body, profile, updated.proxy, updated);
           const authChanged = JSON.stringify(authentication.proxyAuth) !== JSON.stringify(profile.proxyAuth || null);
           if (updated.accountLabel !== profile.accountLabel && sessionActive(profile.id)) throw new Error('请先关闭环境浏览器，再修改账号代号。');
           if (authChanged || updated.proxy !== profile.proxy || updated.country !== profile.country || JSON.stringify(updated.environment) !== JSON.stringify(profile.environment) || updated.strictIp !== profile.strictIp) {
@@ -280,6 +317,7 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
             delete profile.proxyBridgePort;
           }
           Object.assign(profile, updated, authentication); save();
+          sessionSummaries.set(profile.id,{envelope:profile.proxyAuth,proxy:profile.proxy,summary:inspectProxySession(profile.proxy,profile.proxyAuth ? await vault.open(profile.proxyAuth) : null)});
           return respond(res, 200, displayProfile(profile));
         }
         if (req.method !== 'POST') return respond(res, 405, { error: '请求方法不支持。' });
@@ -359,7 +397,7 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
         }
         return respond(res, 404, { error: '接口不存在。' });
       }
-      const assets = { '/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/proxy-input.js': ['proxy-input.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'] };
+      const assets = { '/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/proxy-input.js': ['proxy-input.js', 'text/javascript'], '/proxy-session.js': ['proxy-session.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'] };
       if (req.method === 'GET' && Object.hasOwn(assets, url.pathname)) {
         const [filename, type] = assets[url.pathname];
         res.setHeader('Content-Type', `${type}; charset=utf-8`);

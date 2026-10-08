@@ -114,12 +114,13 @@
         <div id="proxy-import-picker" class="proxy-import-picker" hidden><label for="proxy-import-choice">选择本次粘贴的线路</label><select id="proxy-import-choice"></select></div>
         <div class="field-grid proxy-auth-fields"><div><label for="proxy-username">代理用户名 <span class="field-optional">可选</span></label><input id="proxy-username" maxlength="255" autocomplete="off" spellcheck="false"></div><div><label for="proxy-password">代理密码 <span class="field-optional">可选</span></label><input id="proxy-password" type="password" maxlength="255" autocomplete="new-password"></div></div>
         <p id="proxy-import-status" class="field-help" role="status" hidden></p>
+        <div id="proxy-session-summary" class="proxy-session-summary" role="status" hidden></div>
         <button id="proxy-import-country" class="button button-small button-outline" type="button" hidden></button>
         <p id="proxy-auth-help" class="field-help">填写代理商提供的凭据，不是 Google 密码。由当前 Windows 用户加密保存，不会放入浏览器命令行或导出记录。</p>
         <label id="clear-proxy-auth-label" class="check-label" for="clear-proxy-auth" hidden><input id="clear-proxy-auth" type="checkbox"><span>清除已保存的代理认证</span></label>
         <div class="proxy-form-actions"><button id="diagnose-proxy" class="button button-small button-primary" type="button">诊断代理</button><button id="clear-profile-proxy" class="button button-small button-outline" type="button">清空代理与认证</button><button id="find-public-proxy" class="button button-small button-outline" type="button">我没有代理，去筛选免费节点 ↓</button></div>
         <div id="proxy-diagnosis" class="proxy-diagnosis" role="status" hidden></div>
-        <label class="check-label" for="profile-strict-ip"><input id="profile-strict-ip" name="strictIp" type="checkbox" checked><span>严格绑定出口 IP</span></label><p class="field-help">首次出口检查通过并启动浏览器后绑定实际出口；之后 IP 变化即拦截。关闭后仍会核对出口国家。</p>
+        <label class="check-label" for="profile-strict-ip"><input id="profile-strict-ip" name="strictIp" type="checkbox" checked><span>严格绑定出口 IP</span></label><p id="proxy-strict-help" class="field-help">首次出口检查通过并启动浏览器后绑定实际出口；之后检查或启动时发现 IP 变化即拦截。关闭后仍会核对出口国家。本选项不能把轮换代理变成固定代理。</p>
         <details id="environment-details" class="environment-details"><summary>浏览器环境设置 <span>语言、时区与视口</span></summary>
           <label for="environment-engine">运行方式</label><select id="environment-engine"><option value="native">原生 Chrome / Edge · 兼容模式</option><option value="managed">受控浏览器 · 实验模式</option></select>
           <p id="environment-engine-help" class="field-help"></p>
