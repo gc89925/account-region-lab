@@ -77,14 +77,16 @@
         <div class="section-heading"><div><p class="eyebrow">03 / PUBLIC NETWORK DIRECTORY</p><h2 id="catalog-title">公共节点筛选</h2><p>批量检查出口和 Google 连通性，只把近期通过的节点列为可用。</p></div><button id="configure-fanout" class="button button-small button-outline" type="button">配置已有代理 ↗</button></div>
         <div class="catalog-panel">
           <div class="catalog-source-control"><label for="catalog-source">目录来源</label><select id="catalog-source"><option value="free">HTTP / SOCKS · 免费公开候选</option><option value="vpngate">VPN Gate · 需要 VPN 客户端转发</option></select></div>
-          <div class="catalog-controls"><label for="catalog-country">查询国家</label><select id="catalog-country"><option value="ALL">全部国家</option><option value="US">美国 · US</option><option value="JP">日本 · JP</option><option value="KR">韩国 · KR</option><option value="IN">印度 · IN</option><option value="NG">尼日利亚 · NG</option></select><button id="scan-proxies" class="button button-primary" type="button">自动筛选可用节点</button><button id="load-catalog" class="button button-outline" type="button">刷新目录</button><span id="catalog-status" class="field-help" aria-live="polite">尚未检查；默认只显示近期检测通过的节点</span></div>
+          <div class="catalog-country-tools"><div><label for="catalog-country-search">搜索国家 / 地区</label><input id="catalog-country-search" type="search" placeholder="例如：印度尼西亚、Germany、BR" autocomplete="off"></div><div><label for="catalog-country">查询国家 / 地区</label><select id="catalog-country" aria-describedby="catalog-country-help"><option value="ALL">全部国家 / 地区</option></select></div><div id="scan-limit-control"><label for="scan-limit">每批候选数量</label><select id="scan-limit"><option value="20">20 个</option><option value="60" selected>60 个</option><option value="120">120 个</option><option value="200">200 个</option></select></div></div>
+          <p id="catalog-country-help" class="field-help"></p>
+          <div class="catalog-controls"><button id="scan-proxies" class="button button-primary" type="button">自动筛选可用节点</button><button id="load-catalog" class="button button-outline" type="button">刷新目录</button><span id="catalog-status" class="field-help" aria-live="polite">尚未检查；默认只显示近期检测通过的节点</span></div>
           <div id="scan-progress" class="scan-progress" hidden><div class="scan-progress-heading"><strong id="scan-progress-title">正在筛选</strong><button id="cancel-scan" class="button button-small button-outline" type="button">停止筛选</button></div><progress id="scan-progress-bar" max="30" value="0" aria-label="节点检测进度"></progress><p id="scan-progress-detail" role="status"></p></div>
           <label id="candidate-filter" class="candidate-filter"><input id="show-candidates" type="checkbox"><span>显示全部候选（含未检测和失败节点）</span></label>
           <p id="catalog-note" class="catalog-note"></p>
           <p id="catalog-error" class="form-error" role="alert" hidden></p>
           <p id="catalog-source-status" class="catalog-source-status" role="status" hidden></p>
           <div id="catalog-summary" aria-live="polite"></div>
-          <div id="catalog-results" aria-live="polite"><div class="catalog-empty">点击“自动筛选可用节点”，程序会分批检查最多 30 个候选；通过的节点可直接填入新环境。</div></div>
+          <div id="catalog-results" aria-live="polite"><div class="catalog-empty">选择国家与每批数量，点击“自动筛选可用节点”。结果会陆续显示，通过的节点可直接填入新环境。</div></div>
           <div id="catalog-source-links" class="catalog-links"></div>
         </div>
       </section>
@@ -106,13 +108,16 @@
         <p id="profile-next-step" class="modal-intro"></p>
         <label for="profile-label">环境名称</label><input id="profile-label" name="label" required maxlength="80" placeholder="例如：印度 · 工作账号" autocomplete="off">
         <label for="profile-account">账号代号 <span id="account-storage-hint" class="field-optional">可选，仅保存在本机</span></label><input id="profile-account" name="accountLabel" maxlength="80" placeholder="例如：work-in-01，无需填写邮箱" autocomplete="off"><p class="field-help">相同代号用于避免在本应用中同时启动多个受控环境；不会读取登录身份，也不管理外部设备。</p>
-        <label for="profile-country">目标国家/地区 <span class="field-optional">两位国家代码</span></label><input id="profile-country" name="country" required pattern="[A-Za-z]{2}" maxlength="2" list="country-options" placeholder="US" autocomplete="off" class="country-input" aria-describedby="country-help"><p id="country-help" class="field-help">美国 US · 日本 JP · 韩国 KR · 印度 IN · 尼日利亚 NG</p>
-        <label for="profile-proxy">代理地址 <span class="field-optional">可稍后配置</span></label><input id="profile-proxy" name="proxy" maxlength="4096" placeholder="socks5://用户名:密码@主机:端口" autocomplete="off" spellcheck="false" aria-describedby="proxy-help proxy-import-status"><p id="proxy-help" class="field-help">可直接粘贴完整 SOCKS5 认证链接，自动拆分地址、用户名和密码。也支持不含认证的 http://主机:端口 或 socks5://主机:端口。</p>
+        <label for="profile-country">目标国家/地区 <span class="field-optional">两位国家代码</span></label><input id="profile-country" name="country" required pattern="[A-Za-z]{2}" maxlength="2" list="country-options" placeholder="US" autocomplete="off" class="country-input" aria-describedby="country-help"><p id="country-help" class="field-help">输入或选择两位国家代码。例如印度 IN、印度尼西亚 ID、尼日利亚 NG。</p>
+        <label for="proxy-import-protocol">无协议代理的导入方式</label><select id="proxy-import-protocol"><option value="auto">自动识别（IPRoyal 支持）</option><option value="socks5">按 SOCKS5 解析</option><option value="http">按 HTTP 解析（仅无认证地址）</option></select>
+        <label for="profile-proxy">代理地址 <span class="field-optional">可稍后配置</span></label><input id="profile-proxy" name="proxy" maxlength="4096" placeholder="粘贴完整代理链接或 主机:端口:用户名:密码" autocomplete="off" spellcheck="false" aria-describedby="proxy-help proxy-import-status"><p id="proxy-help" class="field-help">直接粘贴完整链接或“主机:端口:用户名:密码”，自动拆分字段。支持多行列表及连续粘连的 IPRoyal 会话；一次选择一条供此环境使用。</p>
+        <div id="proxy-import-picker" class="proxy-import-picker" hidden><label for="proxy-import-choice">选择本次粘贴的线路</label><select id="proxy-import-choice"></select></div>
         <div class="field-grid proxy-auth-fields"><div><label for="proxy-username">代理用户名 <span class="field-optional">可选</span></label><input id="proxy-username" maxlength="255" autocomplete="off" spellcheck="false"></div><div><label for="proxy-password">代理密码 <span class="field-optional">可选</span></label><input id="proxy-password" type="password" maxlength="255" autocomplete="new-password"></div></div>
         <p id="proxy-import-status" class="field-help" role="status" hidden></p>
+        <button id="proxy-import-country" class="button button-small button-outline" type="button" hidden></button>
         <p id="proxy-auth-help" class="field-help">填写代理商提供的凭据，不是 Google 密码。由当前 Windows 用户加密保存，不会放入浏览器命令行或导出记录。</p>
         <label id="clear-proxy-auth-label" class="check-label" for="clear-proxy-auth" hidden><input id="clear-proxy-auth" type="checkbox"><span>清除已保存的代理认证</span></label>
-        <div class="proxy-form-actions"><button id="diagnose-proxy" class="button button-small button-primary" type="button">诊断代理</button><button id="find-public-proxy" class="button button-small button-outline" type="button">我没有代理，去筛选免费节点 ↓</button></div>
+        <div class="proxy-form-actions"><button id="diagnose-proxy" class="button button-small button-primary" type="button">诊断代理</button><button id="clear-profile-proxy" class="button button-small button-outline" type="button">清空代理与认证</button><button id="find-public-proxy" class="button button-small button-outline" type="button">我没有代理，去筛选免费节点 ↓</button></div>
         <div id="proxy-diagnosis" class="proxy-diagnosis" role="status" hidden></div>
         <label class="check-label" for="profile-strict-ip"><input id="profile-strict-ip" name="strictIp" type="checkbox" checked><span>严格绑定出口 IP</span></label><p class="field-help">首次出口检查通过并启动浏览器后绑定实际出口；之后 IP 变化即拦截。关闭后仍会核对出口国家。</p>
         <details id="environment-details" class="environment-details"><summary>浏览器环境设置 <span>语言、时区与视口</span></summary>
@@ -123,7 +128,8 @@
           <label for="environment-color">外观</label><select id="environment-color"><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option></select>
           <p class="field-help">每个环境使用独立配置目录，分隔 Cookie 与存储。设置不会伪造 Canvas / WebGL 指纹，也不会模拟观看或浏览行为。</p>
         </details>
-        <div id="profile-binding-note" class="form-note">首次打开浏览器（包括环境诊断）后，国家、代理与浏览器设置固定绑定。需要切换时请新建环境。</div>
+        <div id="profile-binding-note" class="form-note">浏览器关闭后可替换或清空代理，账号登录目录保留。</div>
+        <button id="close-profile-for-edit" class="button button-small button-outline" type="button" hidden>关闭此浏览器并编辑代理</button>
         <p id="profile-form-error" class="form-error" role="alert" hidden></p>
         <div class="modal-actions"><button class="button button-outline" type="button" data-close="profile-dialog">取消</button><button id="profile-submit" class="button button-primary" type="submit">创建环境</button></div>
       </form>

@@ -14,7 +14,7 @@ import { createSocksBridge } from './lib/socks-bridge.js';
 import { createRemoteLauncher } from './lib/remote-browser.js';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
-const VERSION = '0.5.0';
+const VERSION = '0.6.0';
 
 function respond(res, status, data) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -77,11 +77,13 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
   let diagnosticsActive = 0;
   const save = () => atomicSave(file, state);
   const sessionActive = id => remoteMode ? remote.isActive(id) : managed.isActive(id);
+  const settingsLocked = profile => sessionActive(profile.id) || launching.has(profile.id) ||
+    (!remoteMode && profile.environment.engine !== 'managed' && profile.launches.length > 0);
   const desktopFor = id => {
     const desktop = remoteMode ? remote.getDesktop?.(id) : null;
     return desktop && Number.isInteger(desktop.port) && desktop.port >= 6101 && desktop.port <= 6105 && /^[a-f0-9]{32}$/.test(desktop.generation) ? desktop : null;
   };
-  const displayProfile = p => { const { proxyAuth, ...visible } = withStats(p); const desktop = desktopFor(p.id); return ({ ...visible, proxyAuthConfigured: !!proxyAuth, locked: p.launches.length > 0, session: { active: sessionActive(p.id), managed: remoteMode || p.environment.engine === 'managed', ...(remoteMode ? {
+  const displayProfile = p => { const { proxyAuth, ...visible } = withStats(p); const desktop = desktopFor(p.id); return ({ ...visible, proxyAuthConfigured: !!proxyAuth, locked: settingsLocked(p), session: { active: sessionActive(p.id), managed: remoteMode || p.environment.engine === 'managed', ...(remoteMode ? {
     starting: !desktop && launching.has(p.id),
     desktopUrl: desktop ? `/desktop/${p.id}/${desktop.generation}/vnc.html?autoconnect=true&resize=scale&path=desktop/${p.id}/${desktop.generation}/websockify` : null,
   } : {}) }, network: {
@@ -111,6 +113,8 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
   }
 
   async function saveAuth(body, profile, proxy) {
+    // Clearing an expired endpoint must also forget its saved credentials.
+    if (!proxy) return { proxyUsername: '', proxyAuth: null };
     if (!Object.hasOwn(body, 'proxyUsername') && !Object.hasOwn(body, 'proxyPassword') && body.clearProxyAuth !== true) {
       if (profile?.proxyAuth && proxy !== profile.proxy) throw new Error('代理地址已改变，请重新填写或清除认证。');
       return { proxyUsername: profile?.proxyUsername || '', proxyAuth: profile?.proxyAuth || null };
@@ -219,7 +223,7 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
           return respond(res,202,{ok:true});
         }
         if (req.method === 'POST' && url.pathname === '/api/proxies/check') return respond(res,200,await publicProxies.check(body.id,body.country));
-        if (req.method === 'POST' && url.pathname === '/api/proxies/scan') return respond(res,202,await publicProxies.startScan(body.country || 'ALL',{limit:body.limit ?? 30}));
+        if (req.method === 'POST' && url.pathname === '/api/proxies/scan') return respond(res,202,await publicProxies.startScan(body.country || 'ALL',{limit:body.limit}));
         if (req.method === 'POST' && url.pathname === '/api/proxies/scan/cancel') return respond(res,200,publicProxies.cancelScan());
         if (req.method === 'POST' && url.pathname === '/api/proxy/diagnose') {
           if (diagnosticsActive >= 3) return respond(res,429,{error:'已有 3 个诊断正在运行，请稍候。'});
@@ -265,9 +269,15 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
           if (updated.accountLabel !== profile.accountLabel && sessionActive(profile.id)) throw new Error('请先关闭环境浏览器，再修改账号代号。');
           if (authChanged || updated.proxy !== profile.proxy || updated.country !== profile.country || JSON.stringify(updated.environment) !== JSON.stringify(profile.environment) || updated.strictIp !== profile.strictIp) {
             // Do not retarget a profile that might still be running with its previous proxy.
-            if (profile.launches.length) throw new Error('使用过的环境已固定网络和环境参数。请新建环境，避免旧浏览器继续使用原配置。名称仍可修改。');
-            profile.checks = []; profile.cycleStartedAt = null; profile.expectedIp = null;
+            if (settingsLocked(profile)) throw new Error(remoteMode || profile.environment.engine === 'managed'
+              ? '请先关闭该环境浏览器，再清空或更换代理和环境参数。登录资料会保留。'
+              : '使用过的本机原生环境无法可靠确认是否已关闭，请新建环境。服务器环境关闭后可以更换代理。');
+            // An old bridge failing to restore must not prevent replacing it.
+            await bridgeStarts.get(profile.id)?.catch(() => {});
             await bridges.get(profile.id)?.close(); bridges.delete(profile.id);
+            if (profile.cycleStartedAt) { profile.cycleHistory ||= []; profile.cycleHistory.push(profile.cycleStartedAt); }
+            profile.checks = []; profile.cycleStartedAt = null; profile.expectedIp = null;
+            delete profile.proxyBridgePort;
           }
           Object.assign(profile, updated, authentication); save();
           return respond(res, 200, displayProfile(profile));

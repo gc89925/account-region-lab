@@ -72,7 +72,7 @@ test('remote UI keeps five independent environment views, preserves refreshes, a
   const card = index => page.locator(`#profile-${profiles[index].id}`);
   const refresh = async () => { const response = page.waitForResponse(response => response.url() === `${origin}/api/state`); await page.locator('#refresh').click(); await response; await page.locator('#refresh').waitFor({ state: 'visible' }); };
   const expectText = async (selector, text) => { await page.waitForFunction(({ selector, text }) => document.querySelector(selector)?.textContent.includes(text), { selector, text }); };
-  const expectViewer = async index => { await page.waitForFunction(path => document.querySelector('#remote-desktop-frame-container iframe')?.getAttribute('src') === path, profiles[index].session.desktopUrl); };
+  const expectViewer = async index => { await page.waitForFunction(path => document.querySelector('#remote-desktop-frame-container iframe')?.getAttribute('src') === path, profiles[index].session.desktopUrl || desktopUrl(profiles[index])); };
   await page.goto(origin);
   await expectText('#remote-session-summary', '运行中 3 / 5');
   await card(0).getByRole('button', { name: '打开测试 US的远程浏览器', exact: true }).click();
@@ -148,5 +148,132 @@ test('remote UI keeps five independent environment views, preserves refreshes, a
   await page.mouse.click(2, 2);
   assert.equal(await page.locator('#profile-dialog').evaluate(dialog => dialog.open), true);
   assert.equal(await page.locator('#profile-label').inputValue(), 'Keep draft');
+  assert.deepEqual(errors, []);
+});
+
+test('proxy settings can be replaced after close, pasted residential sessions stay private, and global catalog filters are selectable', async t => {
+  const executablePath = await browserPath();
+  if (!executablePath) { t.skip('A local Chrome/Chromium/Edge executable is needed for the browser UI test'); return; }
+  const profile = { id: '00000000-0000-4000-8000-000000000009', label: '已用印度环境', country: 'IN',
+    accountLabel: 'example-account', proxy: 'socks5://expired.example:1080', proxyUsername: 'old-user', proxyAuthConfigured: true,
+    environment: { engine: 'native' }, launches: [{ at: new Date().toISOString() }], checks: [], observations: [],
+    locked: true, session: { active: true, managed: true, starting: false } };
+  profile.session.desktopUrl = desktopUrl(profile);
+  const patches = [], scanRequests = [], countryRequests = [], errors = [];
+  let scan = { state: 'idle', running: false };
+  let pendingCatalogResponses = 0;
+  const staticFiles = new Map(await Promise.all(['index.html', 'app.js', 'style.css', 'proxy-input.js'].map(async name => [name, await readFile(new URL(`../public/${name}`, import.meta.url))])));
+  const server = createServer(async (request, response) => {
+    const url = new URL(request.url, 'http://localhost');
+    const json = value => { response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify(value)); };
+    const body = async () => { let value = ''; for await (const chunk of request) value += chunk; return JSON.parse(value); };
+    if (url.pathname === '/api/state') return json({ profiles: [profile], token: 'test-token', browser: { name: 'Test Chrome' }, capabilities: { remoteBrowser: true, maxRemoteEnvironments: 5 }, links: {} });
+    if (url.pathname === `/api/profiles/${profile.id}/close`) { profile.session.active = false; profile.session.desktopUrl = null; profile.locked = false; return json({ ok: true, profile }); }
+    if (url.pathname === `/api/profiles/${profile.id}` && request.method === 'PATCH') {
+      const input = await body(); patches.push(input); Object.assign(profile, input); profile.proxyAuthConfigured = Boolean(input.proxy && input.proxyPassword); return json(profile);
+    }
+    if (url.pathname === '/api/proxies') {
+      const country = url.searchParams.get('country'); countryRequests.push(country);
+      const refreshing = pendingCatalogResponses-- > 0;
+      return json({ country, nodes: [], total: 12, countryCounts: { DE: 7, BR: 3, ID: 2 }, countries: [{ code: 'DE', count: 7 }, { code: 'BR', count: 3 }, { code: 'ID', count: 2 }], refreshing,
+        sources: [{ name: 'Example', ok: true }, { name: 'Slow source', ok: !refreshing, loading: refreshing }] });
+    }
+    if (url.pathname === '/api/proxies/scan') {
+      if (request.method === 'POST') { const input = await body(); scanRequests.push(input); scan = { state: 'running', running: true, country: input.country, total: input.limit, tested: 3, active: 5, connecting: 3, verifying: 2, passed: 0, failed: 3 }; }
+      return json(scan);
+    }
+    if (url.pathname === '/api/proxies/scan/cancel') { scan = { ...scan, state: 'cancelled', running: false, active: 0, connecting: 0, verifying: 0, cancelled: 5 }; return json(scan); }
+    const name = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
+    if (staticFiles.has(name)) { response.setHeader('Content-Type', name.endsWith('.js') ? 'text/javascript' : name.endsWith('.css') ? 'text/css' : 'text/html'); return response.end(staticFiles.get(name)); }
+    response.statusCode = 404; response.end();
+  });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  t.after(async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
+  const browser = await chromium.launch({ executablePath, headless: true }); t.after(() => browser.close());
+  const context = await browser.newContext();
+  await context.route('**/*', route => route.request().url().startsWith(origin + '/') ? route.continue() : route.abort());
+  const page = await context.newPage(); page.on('pageerror', error => errors.push(error.message));
+  const edit = () => page.getByRole('button', { name: '编辑已用印度环境', exact: true }).click();
+  const paste = value => page.locator('#profile-proxy').evaluate((input, value) => {
+    const clipboardData = new DataTransfer(); clipboardData.setData('text/plain', value);
+    input.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData }));
+  }, value);
+  await page.goto(origin); await edit();
+  assert.equal(await page.locator('#profile-proxy').isDisabled(), true);
+  assert.match(await page.locator('#profile-binding-note').innerText(), /先关闭浏览器/);
+  await page.locator('#close-profile-for-edit').click();
+  await page.waitForFunction(() => !document.querySelector('#profile-proxy').disabled);
+  assert.equal(profile.session.active, false);
+  await page.locator('#clear-profile-proxy').click();
+  assert.equal(await page.locator('#profile-proxy').inputValue(), '');
+  assert.equal(await page.locator('#proxy-username').inputValue(), '');
+  await page.locator('#profile-submit').click();
+  await page.waitForFunction(() => !document.querySelector('#profile-dialog').open);
+  assert.equal(patches.at(-1).proxy, '');
+  assert.equal(patches.at(-1).proxyUsername, '');
+  assert.equal(profile.launches.length, 1, 'network changes preserve the existing environment identity');
+
+  await edit();
+  const prefix = 'geo.iproyal.com:12321:demo-user:';
+  const syntheticPasswords = ['DemoSecret_country-id_session-ExampleOne_lifetime-168h_streaming-1', 'DemoSecret_country-id_session-ExampleTwo_lifetime-168h_streaming-1', 'DemoSecret_country-id_session-ExampleThree_lifetime-168h_streaming-1'];
+  await paste(syntheticPasswords.map(password => prefix + password).join(''));
+  assert.equal(await page.locator('#proxy-import-choice option').count(), 3);
+  assert.equal(await page.locator('#profile-proxy').inputValue(), 'socks5://geo.iproyal.com:12321');
+  assert.equal(await page.locator('#proxy-username').inputValue(), 'demo-user');
+  assert.equal(await page.locator('#proxy-password').getAttribute('type'), 'password');
+  assert.equal(await page.locator('#profile-country').inputValue(), 'IN', 'pasted country must not silently change the existing country');
+  assert.match(await page.locator('#proxy-import-status').innerText(), /ID 为印度尼西亚/);
+  const visibleChoices = await page.locator('#proxy-import-choice').innerText();
+  assert.ok(!visibleChoices.includes('DemoSecret') && !visibleChoices.includes('demo-user') && !visibleChoices.includes('ExampleOne'), 'choices expose only endpoint, country, and masked session hints');
+  await page.locator('#proxy-import-choice').selectOption('2');
+  assert.equal(await page.locator('#proxy-password').inputValue(), syntheticPasswords[2]);
+  await page.locator('#proxy-import-country').click();
+  assert.equal(await page.locator('#profile-country').inputValue(), 'ID');
+  await page.locator('#profile-submit').click();
+  await page.waitForFunction(() => !document.querySelector('#profile-dialog').open);
+  assert.equal(patches.at(-1).proxyPassword, syntheticPasswords[2]);
+  assert.equal(patches.at(-1).country, 'ID');
+  assert.equal(await page.locator('#proxy-password').inputValue(), '', 'closing the form clears imported secrets from hidden fields');
+  await edit(); assert.equal(await page.locator('#proxy-import-choice option').count(), 0);
+  await paste('socks5://changed.example:1080');
+  assert.match(await page.locator('#proxy-import-status').innerText(), /原认证字段暂时保留/);
+  await paste('proxy.example:1080:demo-user:NotARealPassword');
+  assert.equal(await page.locator('#profile-proxy').inputValue(), '', 'ambiguous credentials must never remain in a visible address field');
+  assert.match(await page.locator('#proxy-import-status').innerText(), /协议/);
+  await page.locator('#proxy-import-protocol').selectOption('socks5');
+  await paste('proxy.example:1080:demo-user:NotARealPassword\nsocks5://anonymous.example:1080');
+  assert.equal(await page.locator('#proxy-import-choice option').count(), 2);
+  await page.locator('#proxy-import-choice').selectOption('1');
+  assert.equal(await page.locator('#proxy-username').inputValue(), '');
+  assert.equal(await page.locator('#proxy-password').inputValue(), '');
+  assert.equal(await page.locator('#clear-proxy-auth').isChecked(), true, 'selecting an anonymous candidate cannot inherit credentials from the previous candidate');
+  await page.getByRole('button', { name: '关闭环境设置', exact: true }).click();
+
+  assert.equal(await page.locator('#catalog-country').inputValue(), 'ALL');
+  assert.ok(await page.locator('#catalog-country option').count() >= 240);
+  await page.locator('#load-catalog').click();
+  await page.waitForFunction(() => document.querySelector('#catalog-country-help').textContent.includes('目录覆盖 3'));
+  await page.locator('#catalog-country-search').fill('Germany');
+  assert.equal(await page.locator('#catalog-country option').count(), 2);
+  await page.locator('#catalog-country').selectOption('DE');
+  await page.waitForFunction(() => !document.querySelector('#catalog-country').disabled);
+  assert.equal(countryRequests.at(-1), 'DE');
+  pendingCatalogResponses = 2;
+  await page.locator('#load-catalog').click();
+  await page.waitForFunction(() => document.querySelector('#catalog-status').textContent.includes('正在补充来源'));
+  assert.equal(await page.locator('#catalog-source-status').isHidden(), true, 'an in-progress source must not be shown as failed');
+  const requestsBeforeRefresh = countryRequests.length;
+  await page.waitForFunction(() => !document.querySelector('#catalog-country').disabled && !document.querySelector('#catalog-status').textContent.includes('正在补充来源'));
+  assert.equal(countryRequests.length, requestsBeforeRefresh + 2, 'source completion ends the automatic refresh cycle');
+  assert.equal(await page.locator('#catalog-country').inputValue(), 'DE');
+  assert.equal(await page.locator('#catalog-country-search').inputValue(), 'Germany');
+  await page.locator('#scan-limit').selectOption('120');
+  await page.locator('#scan-proxies').click();
+  await page.waitForFunction(() => document.querySelector('#scan-progress-detail').textContent.includes('快速连接 3'));
+  assert.deepEqual(scanRequests.at(-1), { country: 'DE', limit: 120 });
+  assert.match(await page.locator('#scan-progress-detail').innerText(), /出口与 Google 验证 2/);
+  await page.locator('#cancel-scan').click();
+  await page.waitForFunction(() => !document.querySelector('#catalog-country').disabled);
   assert.deepEqual(errors, []);
 });

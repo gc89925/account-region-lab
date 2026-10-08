@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { once } from 'node:events';
 import path from 'node:path';
@@ -23,7 +23,7 @@ async function fixture(t, overrides = {}) {
     probe: { ip: '203.0.113.42', country: 'IN' },
     destination: { ok: true, httpStatus: 200, latencyMs: 1 },
   };
-  const lab = createLabServer({
+  const options = {
     dataDir,
     remoteMode: true,
     publicOrigin: PUBLIC_ORIGIN,
@@ -67,10 +67,11 @@ async function fixture(t, overrides = {}) {
       return bridge;
     },
     ...overrides,
-  });
+  };
+  let lab = createLabServer(options);
   lab.server.listen(0, '127.0.0.1');
   await once(lab.server, 'listening');
-  const origin = `http://127.0.0.1:${lab.server.address().port}`;
+  let origin = `http://127.0.0.1:${lab.server.address().port}`;
   t.after(async () => { await lab.close(); await rm(dataDir, { recursive: true, force: true }); });
   async function request(route, { method = 'GET', body, headers = {} } = {}) {
     // Raw HTTP preserves explicit Host and Sec-Fetch-Site values; fetch may
@@ -105,7 +106,16 @@ async function fixture(t, overrides = {}) {
     return result.value;
   }
   const post = (route, body = {}) => request(route, { method: 'POST', body });
-  return { dataDir, origin, calls, control, active, request, post, state, create, close: () => lab.close() };
+  return {
+    dataDir, get origin() { return origin; }, calls, control, active, request, post, state, create, close: () => lab.close(),
+    async restart() {
+      await lab.close();
+      lab = createLabServer(options);
+      lab.server.listen(0, '127.0.0.1');
+      await once(lab.server, 'listening');
+      origin = `http://127.0.0.1:${lab.server.address().port}`;
+    },
+  };
 }
 
 test('remote snapshot advertises per-profile desktops and capacity', async t => {
@@ -181,6 +191,104 @@ test('five different environments remain active and closing one frees only its s
   assert.deepEqual([...app.active],profiles.slice(1,5).map(p => p.id));
   assert.equal((await app.post(`/api/profiles/${profiles[5].id}/launch`, { target: 'signin' })).status, 200);
   assert.deepEqual([...app.active],profiles.slice(1).map(p => p.id));
+});
+
+test('expired remote proxies can be cleared and replaced after close while preserving the login directory', async t => {
+  const app = await fixture(t);
+  const profile = await app.create({proxyUsername:TEST_AUTH.username,proxyPassword:TEST_AUTH.password});
+  const route = `/api/profiles/${profile.id}`;
+  assert.equal((await app.post(route+'/launch',{target:'gmail'})).status,200);
+  const profileDir = app.calls.remote[0].profileDir;
+  await writeFile(path.join(profileDir,'login-preservation-sentinel'),'existing account data');
+  await app.post(route+'/observations',{country:'CN',note:'Before proxy expired'});
+  const active = (await app.state()).profiles.find(p=>p.id===profile.id);
+  assert.equal(active.locked,true);
+  const rejected = await app.request(route,{method:'PATCH',body:{proxy:''}});
+  assert.equal(rejected.status,400); assert.match(rejected.value.error,/先关闭/);
+  assert.equal((await app.state()).profiles.find(p=>p.id===profile.id).proxy,TARGET_PROXY);
+  await app.post(route+'/close');
+  assert.equal((await app.state()).profiles.find(p=>p.id===profile.id).locked,false);
+  const cleared = await app.request(route,{method:'PATCH',body:{proxy:''}});
+  assert.equal(cleared.status,200,cleared.raw);
+  assert.equal(cleared.value.proxy,'');
+  assert.equal(cleared.value.proxyAuthConfigured,false);
+  assert.equal(cleared.value.proxyUsername,'');
+  assert.equal(cleared.value.expectedIp,null);
+  assert.equal(cleared.value.cycleStartedAt,null);
+  assert.equal(cleared.value.proxyBridgePort,undefined);
+  assert.equal(cleared.value.launches.length,1);
+  assert.equal(cleared.value.observations.length,1);
+  assert.ok(cleared.value.cycleHistory.includes(active.cycleStartedAt));
+  assert.equal(app.calls.bridges[0].bridge.closed,true);
+  assert.equal((await app.post(route+'/launch',{target:'gmail'})).status,400);
+  const changed = await app.request(route,{method:'PATCH',body:{proxy:'socks5://replacement.example.test:12321',proxyUsername:'replacement-user',proxyPassword:'replacement-test-password'}});
+  assert.equal(changed.status,200,changed.raw);
+  assert.equal(changed.value.proxyAuthConfigured,true);
+  app.control.probe = {ip:'203.0.113.99',country:'IN'};
+  assert.equal((await app.post(route+'/launch',{target:'gmail'})).status,200);
+  assert.equal(app.calls.remote.at(-1).profileDir,profileDir);
+  assert.equal(await readFile(path.join(profileDir,'login-preservation-sentinel'),'utf8'),'existing account data');
+  assert.equal(app.calls.bridges.at(-1).proxy,'socks5://replacement.example.test:12321');
+  assert.equal((await app.state()).profiles.find(p=>p.id===profile.id).expectedIp,'203.0.113.99');
+});
+
+test('a failed remote close keeps network settings locked and credentials intact', async t => {
+  const app = await fixture(t);
+  const profile = await app.create({proxyUsername:TEST_AUTH.username,proxyPassword:TEST_AUTH.password});
+  const route = `/api/profiles/${profile.id}`;
+  await app.post(route+'/launch',{target:'diagnostics'});
+  app.control.closeFails=true;
+  assert.equal((await app.post(route+'/close')).status,400);
+  assert.equal((await app.request(route,{method:'PATCH',body:{proxy:''}})).status,400);
+  const saved=(await app.state()).profiles.find(p=>p.id===profile.id);
+  assert.equal(saved.locked,true); assert.equal(saved.proxyAuthConfigured,true);
+  assert.equal(saved.proxy,TARGET_PROXY);
+});
+
+test('clearing an expired proxy succeeds when its concurrent startup bridge restoration fails', async t => {
+  let restoring = false, rejectRestoration, notifyRestoration;
+  const restorationReached = new Promise(resolve => { notifyRestoration = resolve; });
+  const app = await fixture(t, {
+    async createBridge() {
+      if (restoring) {
+        notifyRestoration();
+        await new Promise((resolve, reject) => { rejectRestoration = reject; });
+      }
+      return { proxy: BRIDGE_PROXY, async close() {} };
+    },
+  });
+  const profile = await app.create({ proxyUsername: TEST_AUTH.username, proxyPassword: TEST_AUTH.password });
+  const route = `/api/profiles/${profile.id}`;
+  assert.equal((await app.post(route + '/launch', { target: 'diagnostics' })).status, 200);
+  await app.post(route + '/close');
+  const profileDir = app.calls.remote[0].profileDir;
+  await writeFile(path.join(profileDir, 'restoration-preservation-sentinel'), 'existing account data');
+
+  restoring = true;
+  await app.restart();
+  await restorationReached;
+  const clearing = app.request(route, { method: 'PATCH', body: { proxy: '' } });
+  try {
+    // A competing edit returning 409 proves the first edit reached the pending
+    // restoration, rather than releasing the failed startup before PATCH began.
+    let competing;
+    for (let attempt = 0; attempt < 10; attempt++) {
+      competing = await app.request(route, { method: 'PATCH', body: { label: profile.label } });
+      if (competing.status === 409) break;
+    }
+    assert.equal(competing.status, 409, competing.raw);
+  } finally {
+    rejectRestoration(new Error('Synthetic expired bridge restoration failure'));
+  }
+  const cleared = await clearing;
+  assert.equal(cleared.status, 200, cleared.raw);
+  assert.equal(cleared.value.proxy, '');
+  assert.equal(cleared.value.proxyAuthConfigured, false);
+  assert.equal(cleared.value.proxyBridgePort, undefined);
+  assert.equal(await readFile(path.join(profileDir, 'restoration-preservation-sentinel'), 'utf8'), 'existing account data');
+  const persisted = JSON.parse(await readFile(path.join(app.dataDir, 'state.json'), 'utf8')).profiles.find(item => item.id === profile.id);
+  assert.equal(persisted.proxyAuth, null);
+  assert.equal(persisted.proxyBridgePort, undefined);
 });
 
 test('in-flight launches reserve capacity and cannot race past the limit', async t => {
