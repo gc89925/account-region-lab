@@ -1,6 +1,5 @@
 {
-  "HighEfficiencyModeEnabled": true,
-  "MemorySaverModeSavings": 2,
+  "HighEfficiencyModeEnabled": false,
   "NetworkPredictionOptions": 2,
   "BackgroundModeEnabled": false,
   "AutoplayAllowed": false
