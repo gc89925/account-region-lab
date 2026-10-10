@@ -1,12 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { PassThrough } from 'node:stream';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { access, mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { createDesktopManager, trackOwnedProcess, stopOwnedProcess } from '../lib/remote-desktop.js';
 
 async function until(condition) {
@@ -178,4 +180,21 @@ test('Linux process group cleanup stops an unresponsive parent and descendant be
   const result = await stopOwnedProcess(owned, 50, 1500);
   assert.deepEqual(result, { ok: true, forced: true });
   assert.equal(owned.alive(), false);
+});
+
+test('desktop launcher rejects malformed display settings before starting processes', { skip: process.platform !== 'linux' }, async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'arl-desktop-settings-'));
+  const marker = path.join(root, 'must-not-exist');
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const script = fileURLToPath(new URL('../deploy/linux/start-desktop.sh', import.meta.url));
+  const run = promisify(execFile);
+  for (const geometry of ['800x600', '1921x1200', '1024x1201', '01024x768', '1024x768 -listen tcp', `1024x768; touch ${marker}`, `$(touch ${marker})`]) {
+    await assert.rejects(run('/bin/bash', [script], {
+      env: { ...process.env, REGION_LAB_DESKTOP_GEOMETRY: geometry, REGION_LAB_X11VNC_DAMAGE: '1' }, timeout: 3000,
+    }), error => error.code === 1 && /Invalid desktop geometry/.test(error.stderr));
+  }
+  await assert.rejects(run('/bin/bash', [script], {
+    env: { ...process.env, REGION_LAB_DESKTOP_GEOMETRY: '1024x768', REGION_LAB_X11VNC_DAMAGE: `1; touch ${marker}` }, timeout: 3000,
+  }), error => error.code === 1 && /must be 0 or 1/.test(error.stderr));
+  await assert.rejects(access(marker), { code: 'ENOENT' });
 });

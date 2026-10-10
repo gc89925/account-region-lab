@@ -6,7 +6,7 @@ Local browser profiles, proxy checks, device-review guidance, and country-associ
 
 [English guide](docs/README.en.md) · [调研依据](docs/research.md) · [fanout 接入](docs/fanout.md) · [验证范围](docs/verification.md) · [贡献指南](CONTRIBUTING.md)
 
-## v0.7 能做什么
+## v0.8 能做什么
 
 | 功能 | 实际行为 |
 | --- | --- |
@@ -27,6 +27,8 @@ Local browser profiles, proxy checks, device-review guidance, and country-associ
 希望本机不运行代理和账号浏览器，请使用[服务器部署方式](docs/server-deployment.md)：浏览器、节点检测和登录目录都在服务器上，网页提供键鼠与画面。入口包含独立登录、HTTPS 和会话校验。首版远程画面不传输音频，不适合把 YouTube 当作流畅视频播放器；本机仍需能够直接访问服务器网页。
 
 服务器模式的“独立窗口”只连接对应环境的画面；关闭标签页或切换画面不会停止浏览器。“关闭环境”只结束选中的环境，登录目录继续保留。不同国家需要分别配置可用的对应国家代理，单改国家选项不会改变出口。并发上限是功能限制，实际承载能力取决于服务器资源和打开的网页；1 GB 主机同时运行多个大型页面可能明显变慢。
+
+小内存主机可启用[轻量模式](docs/performance.md)：1024×768 桌面、DAMAGE 局部更新、Chrome 内存节省策略。首次创建窗口，后续快捷入口新增标签，避免每次再开独立窗口；打开同环境的独立画面时自动断开重复的嵌入画面。工作台显示服务器内存和交换空间。已有标签不会自动关闭，用完后关闭环境可释放资源并保留登录资料。
 
 ## 快速开始
 

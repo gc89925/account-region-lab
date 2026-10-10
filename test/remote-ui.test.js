@@ -32,12 +32,13 @@ test('remote UI keeps five independent environment views, preserves refreshes, a
     checks: [], observations: [], launches: [], session: { active: index < 3, managed: true, starting: false }
   }));
   for (const profile of profiles) profile.session.desktopUrl = profile.session.active ? desktopUrl(profile) : null;
+  let serverResources = { mode: 'lean', memory: { totalMiB: 1086, availableMiB: 300, swapUsedMiB: 512 }, load1: 0.65, cpuCount: 1 };
   const actions = [], desktopRequests = [], errors = [];
   const staticFiles = new Map(await Promise.all(['index.html', 'app.js', 'style.css', 'proxy-input.js', 'proxy-session.js'].map(async name => [name, await readFile(new URL(`../public/${name}`, import.meta.url))])));
   const server = createServer(async (request, response) => {
     const url = new URL(request.url, 'http://localhost');
     const json = value => { response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify(value)); };
-    if (url.pathname === '/api/state') return json({ profiles, token: 'test-token', browser: { name: 'Test Chrome' },
+    if (url.pathname === '/api/state') return json({ profiles, token: 'test-token', browser: { name: 'Test Chrome' }, serverResources,
       capabilities: { remoteBrowser: true, managed: false, maxRemoteEnvironments: 5 },
       remoteSessions: { limit: 5, active: profiles.filter(profile => profile.session.active).length, starting: 0 }, links: {} });
     if (url.pathname === '/api/proxies/scan') return json({ state: 'idle', running: false });
@@ -76,6 +77,11 @@ test('remote UI keeps five independent environment views, preserves refreshes, a
   const expectViewer = async index => { await page.waitForFunction(path => document.querySelector('#remote-desktop-frame-container iframe')?.getAttribute('src') === path, profiles[index].session.desktopUrl || desktopUrl(profiles[index])); };
   await page.goto(origin);
   await expectText('#remote-session-summary', '运行中 3 / 5');
+  await expectText('#server-resource-status', '轻量模式');
+  await expectText('#server-resource-status', '内存 786 / 1086 MiB');
+  await expectText('#server-resource-status', '交换空间 512 MiB');
+  await expectText('#server-resource-status', '1 分钟负载 0.7 / 1 核');
+  await expectText('#remote-performance-hint', '关闭不用的标签');
   await card(0).getByRole('button', { name: '打开测试 US的远程浏览器', exact: true }).click();
   await expectViewer(0);
   await page.getByRole('button', { name: '查看测试 JP的远程画面', exact: true }).click();
@@ -96,9 +102,30 @@ test('remote UI keeps five independent environment views, preserves refreshes, a
   assert.equal(popup.url(), origin + profiles[2].session.desktopUrl);
   assert.equal(await page.locator('#remote-desktop-frame-container iframe').getAttribute('src'), profiles[1].session.desktopUrl);
   await popup.close();
+  for (const activation of ['card-click', 'card-modified-click', 'toolbar-keyboard']) {
+    await card(1).getByRole('button', { name: '打开测试 JP的远程浏览器', exact: true }).click();
+    await expectViewer(1);
+    const sameProfileLink = activation === 'toolbar-keyboard' ? page.locator('#remote-desktop-tab')
+      : card(1).getByRole('link', { name: '在独立窗口打开测试 JP', exact: true });
+    const sameProfilePopupPromise = context.waitForEvent('page');
+    if (activation === 'toolbar-keyboard') { await sameProfileLink.focus(); await sameProfileLink.press('Enter'); }
+    else await sameProfileLink.click(activation === 'card-modified-click' ? { modifiers: ['ControlOrMeta'] } : {});
+    const sameProfilePopup = await sameProfilePopupPromise;
+    await sameProfilePopup.waitForLoadState();
+    assert.equal(sameProfilePopup.url(), origin + profiles[1].session.desktopUrl);
+    assert.equal(await page.locator('#remote-desktop-frame-container iframe').count(), 0, `${activation} should release a duplicate inline viewer`);
+    assert.equal(await page.locator('#remote-browser').isVisible(), false);
+    assert.equal(profiles[1].session.active, true);
+    await sameProfilePopup.close();
+  }
+  await card(1).getByRole('button', { name: '打开测试 JP的远程浏览器', exact: true }).click();
+  await expectViewer(1);
   await page.getByRole('button', { name: '收起画面', exact: true }).click();
   assert.equal(await page.locator('#remote-desktop-frame-container iframe').count(), 0);
   assert.equal(actions.length, 0, 'switching, opening a separate view, and hiding cannot close browser sessions');
+  serverResources = null;
+  await refresh();
+  assert.equal(await page.locator('#server-resource-status').isVisible(), false, 'older servers without resource metrics remain supported');
 
   await card(1).getByRole('button', { name: '关闭测试 JP的浏览器', exact: true }).click();
   await expectText('#remote-session-summary', '运行中 2 / 5');

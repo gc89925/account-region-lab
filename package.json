@@ -1,6 +1,6 @@
 {
   "name": "account-region-lab",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "private": true,
   "type": "module",
   "description": "Local isolated browser profiles and evidence-based Google country observation",

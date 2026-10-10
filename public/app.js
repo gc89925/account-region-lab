@@ -129,6 +129,30 @@ function closeRemoteDesktop() {
   $('#open-remote-desktop').setAttribute('aria-expanded', 'false');
 }
 
+function releaseDuplicateViewer(profileId) {
+  if (remoteViewerOpen && selectedRemoteProfileId === profileId) closeRemoteDesktop();
+}
+
+function renderServerResources() {
+  const container = $('#server-resource-status');
+  const resources = remoteBrowserEnabled() ? state.serverResources : null;
+  const labels = [];
+  const memory = resources?.memory;
+  if (Number.isFinite(memory?.totalMiB) && memory.totalMiB > 0 && Number.isFinite(memory.availableMiB)) {
+    const used = Math.max(0, Math.min(memory.totalMiB, memory.totalMiB - memory.availableMiB));
+    labels.push(`内存 ${Math.round(used)} / ${Math.round(memory.totalMiB)} MiB`);
+  }
+  if (Number.isFinite(memory?.swapUsedMiB) && memory.swapUsedMiB > 0) labels.push(`交换空间 ${Math.round(memory.swapUsedMiB)} MiB`);
+  if (Number.isFinite(resources?.load1) && resources.load1 >= 0 && Number.isInteger(resources.cpuCount) && resources.cpuCount > 0) {
+    labels.push(`1 分钟负载 ${resources.load1.toFixed(1)} / ${resources.cpuCount} 核`);
+  }
+  container.replaceChildren();
+  if (resources?.mode === 'lean') container.append(element('span', 'lean-mode-badge', '轻量模式'));
+  if (labels.length) container.append(element('span', '', labels.join(' · ')));
+  container.hidden = !container.childElementCount;
+  $('#remote-performance-hint').hidden = !remoteBrowserEnabled();
+}
+
 function renderRemoteDesktop() {
   const available = state.profiles.filter((profile) => remoteDesktopPath(profile));
   const selected = available.find((profile) => profile.id === selectedRemoteProfileId) || available[0];
@@ -197,7 +221,8 @@ function renderRuntimeLocation() {
   const capacity = remoteCapacity();
   $('#remote-session-summary').hidden = !remote;
   $('#remote-session-summary').textContent = `运行中 ${capacity.active} / ${capacity.limit}${capacity.starting ? ` · 正在启动 ${capacity.starting} 个` : ''}`;
-  $('#remote-browser-note').textContent = `最多同时运行 ${capacity.limit} 个环境；每个环境独立连接。切换或收起画面只断开当前画面，浏览器继续运行。点击“独立窗口”可同时操作多个环境，关闭其中一个浏览器不影响其他环境。`;
+  $('#remote-browser-note').textContent = `最多同时运行 ${capacity.limit} 个环境。切换或收起画面仅断开画面连接，不释放浏览器内存。打开同一环境的“独立窗口”会自动收起本页画面，避免重复传输。暂时不用时点击环境卡片的“关闭浏览器”，登录资料会保留。`;
+  renderServerResources();
   renderRemoteDesktop();
 }
 
@@ -444,6 +469,7 @@ function renderProfile(profile) {
       const link = element('a', 'button button-small button-outline', '独立窗口 ↗');
       link.href = path; link.target = '_blank'; link.rel = 'noopener noreferrer';
       link.setAttribute('aria-label', `在独立窗口打开${profile.label}`);
+      link.addEventListener('click', () => releaseDuplicateViewer(profile.id));
       management.append(link);
     }
   }
@@ -1441,6 +1467,7 @@ $('#hide-remote-desktop').addEventListener('click', () => {
   closeRemoteDesktop();
   $('#open-remote-desktop').focus();
 });
+$('#remote-desktop-tab').addEventListener('click', () => releaseDuplicateViewer(selectedRemoteProfileId));
 function updateCountryDefaults() {
   if (editingProfileId) return;
   const defaults = environmentDefaults[$('#profile-country').value.toUpperCase()];
