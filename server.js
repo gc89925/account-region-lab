@@ -16,7 +16,7 @@ import { inspectProxySession, prepareProxySession, applyProxySessionOptions } fr
 import { sampleProxyStability, createStabilityHistory } from './lib/proxy-stability.js';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
-const VERSION = '0.7.0';
+const VERSION = '0.9.0';
 
 function respond(res, status, data) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -304,10 +304,22 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
           state.profiles.push(p); save();
           return respond(res, 201, displayProfile(p));
         }
-        const match = /^\/api\/profiles\/([a-f0-9-]{36})(?:\/(check|launch|observations|cycle|device-review|close))?$/.exec(url.pathname);
+        const match = /^\/api\/profiles\/([a-f0-9-]{36})(?:\/(check|launch|resume|observations|cycle|device-review|close))?$/.exec(url.pathname);
         if (!match) return respond(res, 404, { error: '接口不存在。' });
         const profile = state.profiles.find(p => p.id === match[1]);
         if (!profile) return respond(res, 404, { error: '环境不存在。' });
+        // Viewing an existing desktop must not probe the proxy, launch another
+        // Chrome window, or rewrite history. Also protect older open workbench
+        // pages whose sign-in button still sends /launch for an active profile.
+        if (req.method === 'POST' && (match[2] === 'resume'
+            || match[2] === 'launch' && remoteMode && body.target === 'signin' && sessionActive(profile.id))) {
+          if (!remoteMode) throw new Error('继续使用入口仅适用于服务器浏览器。');
+          const current = displayProfile(profile);
+          if (!current.session.desktopUrl) return respond(res, 409, { error: current.session.active || current.session.starting
+            ? '此环境的远程画面尚未就绪，请稍后刷新重试。'
+            : '此环境的浏览器已关闭。状态已更新，请点击“登录 Google 账号”重新启动。', profile: current });
+          return respond(res, 200, { ok: true, resumed: true, message: '已连接现有浏览器画面，原有标签保持不变。', profile: current });
+        }
         if (busy.has(profile.id) || diagnosingProfiles.has(profile.id)) return respond(res, 409, { error: '这个环境正在检测或启动，请稍后再试。' });
         lockedId = profile.id; busy.add(lockedId);
         if (req.method === 'PATCH' && !match[2]) {

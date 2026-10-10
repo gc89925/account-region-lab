@@ -33,6 +33,7 @@ test('remote UI keeps five independent environment views, preserves refreshes, a
   }));
   for (const profile of profiles) profile.session.desktopUrl = profile.session.active ? desktopUrl(profile) : null;
   const actions = [], desktopRequests = [], errors = [];
+  let holdNextLaunch = false, releaseLaunch;
   const staticFiles = new Map(await Promise.all(['index.html', 'app.js', 'style.css', 'proxy-input.js', 'proxy-session.js'].map(async name => [name, await readFile(new URL(`../public/${name}`, import.meta.url))])));
   const server = createServer(async (request, response) => {
     const url = new URL(request.url, 'http://localhost');
@@ -41,10 +42,18 @@ test('remote UI keeps five independent environment views, preserves refreshes, a
       capabilities: { remoteBrowser: true, managed: false, maxRemoteEnvironments: 5 },
       remoteSessions: { limit: 5, active: profiles.filter(profile => profile.session.active).length, starting: 0 }, links: {} });
     if (url.pathname === '/api/proxies/scan') return json({ state: 'idle', running: false });
-    const action = url.pathname.match(/^\/api\/profiles\/([^/]+)\/(close|launch)$/);
+    const action = url.pathname.match(/^\/api\/profiles\/([^/]+)\/(close|launch|resume)$/);
     if (action && request.method === 'POST') {
       actions.push({ id: action[1], action: action[2] });
       const profile = profiles.find(item => item.id === action[1]);
+      if (action[2] === 'resume') {
+        if (!profile.session.active) { response.statusCode = 409; return json({ error: '此环境的浏览器已关闭。', profile }); }
+        return json({ ok: true, resumed: true, profile });
+      }
+      if (action[2] === 'launch' && holdNextLaunch) {
+        holdNextLaunch = false;
+        await new Promise(resolve => { releaseLaunch = resolve; });
+      }
       profile.session.active = action[2] === 'launch';
       profile.session.desktopUrl = profile.session.active ? desktopUrl(profile) : null;
       return json({ ok: true, profile });
@@ -63,7 +72,7 @@ test('remote UI keeps five independent environment views, preserves refreshes, a
   });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   const origin = `http://127.0.0.1:${server.address().port}`;
-  t.after(async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
+  t.after(async () => { releaseLaunch?.(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
   const browser = await chromium.launch({ executablePath, headless: true });
   t.after(() => browser.close());
   const context = await browser.newContext();
@@ -96,6 +105,16 @@ test('remote UI keeps five independent environment views, preserves refreshes, a
   assert.equal(popup.url(), origin + profiles[2].session.desktopUrl);
   assert.equal(await page.locator('#remote-desktop-frame-container iframe').getAttribute('src'), profiles[1].session.desktopUrl);
   await popup.close();
+  const sameEnvironmentPopup = context.waitForEvent('page');
+  await page.locator('#remote-desktop-tab').click();
+  const movedViewer = await sameEnvironmentPopup;
+  await movedViewer.waitForLoadState();
+  assert.equal(movedViewer.url(), origin + profiles[1].session.desktopUrl);
+  await page.waitForFunction(() => !document.querySelector('#remote-desktop-frame-container iframe'));
+  assert.equal(profiles[1].session.active, true, 'moving the same view out cannot close the browser');
+  await movedViewer.close();
+  await card(1).getByRole('button', { name: '打开测试 JP的远程浏览器', exact: true }).click();
+  await expectViewer(1);
   await page.getByRole('button', { name: '收起画面', exact: true }).click();
   assert.equal(await page.locator('#remote-desktop-frame-container iframe').count(), 0);
   assert.equal(actions.length, 0, 'switching, opening a separate view, and hiding cannot close browser sessions');
@@ -116,9 +135,10 @@ test('remote UI keeps five independent environment views, preserves refreshes, a
   await card(5).getByRole('button', { name: '在测试 CA环境登录Google账号', exact: true }).click();
   await expectText(`#profile-${profiles[5].id} .operation-status`, '已占用 5 个');
   assert.equal(actions.length, countBefore);
-  await card(0).getByRole('button', { name: '在测试 US环境登录Google账号', exact: true }).click();
+  await card(0).getByRole('button', { name: '继续使用测试 US', exact: true }).click();
   await expectViewer(0);
-  assert.equal(actions.length, countBefore + 1, 'existing environments may open pages at capacity');
+  assert.equal(actions.length, countBefore + 1, 'existing environments may resume at capacity');
+  assert.deepEqual(actions.at(-1), { id: profiles[0].id, action: 'resume' });
 
   profiles[4].session = { active: false, managed: true, starting: true, desktopUrl: null };
   await refresh();
@@ -149,6 +169,39 @@ test('remote UI keeps five independent environment views, preserves refreshes, a
   await page.mouse.click(2, 2);
   assert.equal(await page.locator('#profile-dialog').evaluate(dialog => dialog.open), true);
   assert.equal(await page.locator('#profile-label').inputValue(), 'Keep draft');
+  await page.getByRole('button', { name: '关闭环境设置', exact: true }).click();
+
+  const pageCountBefore = actions.length;
+  holdNextLaunch = true;
+  const gmail = card(0).getByRole('button', { name: '在测试 US环境新标签中打开Gmail', exact: true });
+  await gmail.evaluate(button => { button.click(); button.click(); });
+  while (!releaseLaunch) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(actions.length, pageCountBefore + 1, 'double clicks while a page request is pending dispatch only once');
+  releaseLaunch();
+  await page.waitForFunction(() => !document.querySelector('#profile-00000000-0000-4000-8000-000000000001 .quick-link').disabled);
+  await gmail.click();
+  await expectText(`#profile-${profiles[0].id} .operation-status`, '刚刚已发送');
+  assert.equal(actions.length, pageCountBefore + 1, 'immediate repeated requests for the same target do not add another tab');
+  assert.equal(actions.at(-1).action, 'launch');
+  assert.equal(profiles[2].session.active, true, 'another environment remains running');
+
+  await page.frameLocator('#remote-desktop-frame-container iframe').getByRole('textbox').fill('Unsaved page stays intact');
+  const resumeRequestsBefore = desktopRequests.length;
+  for (let i = 0; i < 2; i++) {
+    const resumed = page.waitForResponse(response => response.url() === `${origin}/api/profiles/${profiles[0].id}/resume`);
+    await card(0).getByRole('button', { name: '继续使用测试 US', exact: true }).click();
+    await resumed;
+    await page.waitForFunction(() => !document.querySelector('#profile-00000000-0000-4000-8000-000000000001 .signin-button').disabled);
+  }
+  assert.equal(desktopRequests.length, resumeRequestsBefore, 'repeated resume keeps the existing viewer connection');
+  assert.equal(await page.frameLocator('#remote-desktop-frame-container iframe').getByRole('textbox').inputValue(), 'Unsaved page stays intact');
+
+  profiles[0].session.active = false; profiles[0].session.desktopUrl = null;
+  await card(0).getByRole('button', { name: '继续使用测试 US', exact: true }).click();
+  await expectText(`#profile-${profiles[0].id} .operation-status`, '已关闭');
+  assert.equal(actions.at(-1).action, 'resume');
+  assert.equal(profiles[0].session.active, false, 'stale resume UI never relaunches a closed browser');
+  assert.equal(await card(0).getByRole('button', { name: '在测试 US环境登录Google账号', exact: true }).count(), 1);
   assert.deepEqual(errors, []);
 });
 

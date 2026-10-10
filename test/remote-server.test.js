@@ -193,6 +193,35 @@ test('five different environments remain active and closing one frees only its s
   assert.deepEqual([...app.active],profiles.slice(1).map(p => p.id));
 });
 
+test('resume is idempotent and older sign-in requests never add tabs or network probes to an active environment', async t => {
+  const app = await fixture(t);
+  const profile = await app.create();
+  const route = `/api/profiles/${profile.id}`;
+  assert.equal((await app.post(route + '/launch', { target: 'signin' })).status, 200);
+  const before = (await app.state()).profiles.find(item => item.id === profile.id);
+  const callsBefore = { remote: app.calls.remote.length, probes: app.calls.probes.length, destinations: app.calls.destinations.length, bridges: app.calls.bridges.length };
+  app.control.probe = new Error('Resuming a desktop must not depend on a fresh proxy probe');
+  for (const action of ['resume', 'resume', 'launch']) {
+    const result = await app.post(`${route}/${action}`, action === 'launch' ? { target: 'signin' } : {});
+    assert.equal(result.status, 200, result.raw);
+    assert.equal(result.value.resumed, true);
+    assert.equal(result.value.profile.session.desktopUrl, before.session.desktopUrl);
+    assert.deepEqual(result.value.profile.launches, before.launches);
+    assert.deepEqual(result.value.profile.checks, before.checks);
+    assert.equal(result.value.profile.expectedIp, before.expectedIp);
+  }
+  assert.deepEqual({ remote: app.calls.remote.length, probes: app.calls.probes.length, destinations: app.calls.destinations.length, bridges: app.calls.bridges.length }, callsBefore);
+  app.control.desktopUnavailable = true;
+  const unavailable = await app.post(route + '/resume');
+  assert.equal(unavailable.status, 409); assert.match(unavailable.value.error, /尚未就绪/);
+  app.control.desktopUnavailable = false;
+  await app.post(route + '/close');
+  const closed = await app.post(route + '/resume');
+  assert.equal(closed.status, 409); assert.match(closed.value.error, /已关闭/);
+  assert.equal(closed.value.profile.session.active, false);
+  assert.equal(app.calls.remote.length, callsBefore.remote, 'resume cannot silently restart a closed browser');
+});
+
 test('expired remote proxies can be cleared and replaced after close while preserving the login directory', async t => {
   const app = await fixture(t);
   const profile = await app.create({proxyUsername:TEST_AUTH.username,proxyPassword:TEST_AUTH.password});

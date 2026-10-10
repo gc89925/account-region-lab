@@ -85,6 +85,7 @@ test('remote native launcher keeps its primary child and persistent directory wi
   assert.deepEqual(f.launcher.getDesktop(f.profile.id), { port: 6101, generation: '0'.repeat(32) });
   assert.ok(f.calls[0].args.includes(`--user-data-dir=${f.profileDir}`));
   assert.ok(f.calls[0].args.includes('--proxy-server=socks5://127.0.0.1:18080'));
+  assert.ok(f.calls[0].args.includes('--new-window'));
   assert.ok(!f.calls[0].args.some(arg => /no-sandbox|remote-debugging|enable-automation/.test(arg)));
   assert.deepEqual(await f.launcher.close(f.profile.id), { ok: true, closed: true, forced: false });
   assert.deepEqual(f.calls[0].child.signals, ['SIGTERM']);
@@ -116,10 +117,24 @@ test('URL handoff helper exit never clears the original active browser', async t
   f.calls[1].child.emit('exit', 0, null);
   await request;
   assert.equal(f.calls[1].args.at(-1), LINKS.gmail);
+  assert.ok(!f.calls[1].args.includes('--new-window'), 'explicit subsequent pages use tabs rather than accumulating Chrome windows');
+  assert.deepEqual(f.calls[1].args.slice(0, -1), f.calls[0].args.slice(0, -1).filter(argument => argument !== '--new-window'));
   assert.equal(f.launcher.isActive(f.profile.id), true);
   f.calls[0].child.emit('exit', 0, null);
   await until(() => !f.launcher.isActive(f.profile.id));
   assert.equal(f.launcher.isActive(f.profile.id), false);
+});
+
+test('opening multiple explicit tabs keeps the original signature and proxy isolation', async t => {
+  const f = await fixture(t);
+  await f.launcher.open(f.options);
+  await f.launcher.open({ ...f.options, url: LINKS.gmail });
+  await f.launcher.open({ ...f.options, url: LINKS.youtube });
+  assert.equal(f.desktopCalls.filter(call => call.action === 'open').length, 1);
+  assert.equal(new Set(f.calls.map(call => call.options.env.DISPLAY)).size, 1);
+  assert.ok(f.calls.slice(1).every(call => !call.args.includes('--new-window')));
+  await assert.rejects(f.launcher.open({ ...f.options, profile: { ...f.profile, proxy: 'socks5://127.0.0.1:19090' } }), /先关闭/);
+  assert.equal(f.calls.length, 3, 'changing a running profile cannot replace its proxy');
 });
 
 test('primary startup exit reports failure and releases its desktop only after cleanup', async t => {

@@ -4,9 +4,10 @@ import { EventEmitter } from 'node:events';
 import { spawn } from 'node:child_process';
 import { PassThrough } from 'node:stream';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createDesktopManager, trackOwnedProcess, stopOwnedProcess } from '../lib/remote-desktop.js';
 
 async function until(condition) {
@@ -36,7 +37,9 @@ async function fixture(t, overrides = {}) {
     if (control.ready) queueMicrotask(() => child.stdout.write('REGION_LAB_DESKTOP_READY\n'));
     return child;
   };
-  const desktops = createDesktopManager({ launch, runtimeRoot, readyTimeout: 100, closeTimeout: 15, killTimeout: 15, ...overrides });
+  // Normal cases exercise readiness semantics, not scheduler speed on a busy
+  // host. The timeout-specific case below still supplies its own short limit.
+  const desktops = createDesktopManager({ launch, runtimeRoot, readyTimeout: 3000, closeTimeout: 15, killTimeout: 15, ...overrides });
   t.after(async () => {
     calls.forEach(({ child }) => { child.ignoreAll = false; });
     await desktops.closeAll();
@@ -84,6 +87,23 @@ test('starting desktops reserve capacity and only become routable after the exac
   f.calls[0].child.stdout.write('READY\n');
   const runtime = await pending;
   assert.equal(f.desktops.get(id), runtime);
+});
+
+test('desktop launcher inherits the configured backend without changing isolation or readiness', async t => {
+  const names = ['REGION_LAB_DESKTOP_BACKEND', 'REGION_LAB_DESKTOP_FRAME_RATE'];
+  const previous = names.map(name => process.env[name]);
+  t.after(() => names.forEach((name, index) => {
+    if (previous[index] === undefined) delete process.env[name];
+    else process.env[name] = previous[index];
+  }));
+  process.env.REGION_LAB_DESKTOP_BACKEND = 'tigervnc';
+  process.env.REGION_LAB_DESKTOP_FRAME_RATE = '12';
+  const f = await fixture(t);
+  const runtime = await f.desktops.open(randomUUID());
+  assert.equal(f.calls[0].options.env.REGION_LAB_DESKTOP_BACKEND, 'tigervnc');
+  assert.equal(f.calls[0].options.env.REGION_LAB_DESKTOP_FRAME_RATE, '12');
+  assert.equal(f.calls[0].options.env.XAUTHORITY, runtime.env.XAUTHORITY);
+  assert.equal(f.calls[0].options.env.REGION_LAB_VNC_PORT, '5902');
 });
 
 test('closing during startup cancels readiness and cleans the owned runtime directory', async t => {
@@ -178,4 +198,116 @@ test('Linux process group cleanup stops an unresponsive parent and descendant be
   const result = await stopOwnedProcess(owned, 50, 1500);
   assert.deepEqual(result, { ok: true, forced: true });
   assert.equal(owned.alive(), false);
+});
+
+// Exercise the real shell launcher without an installed desktop or external
+// sockets. Components record argv and stay alive until the launcher's cleanup.
+// Actual rendering and performance require the separate real-browser benchmark.
+const skipLauncher = process.platform !== 'linux' || process.getuid?.() === 0;
+async function launcherFixture(t, { backend, frameRate } = {}) {
+  const root = await mkdtemp(path.join(tmpdir(), 'arl-desktop-shell-'));
+  const bin = path.join(root, 'bin'), runtime = path.join(root, 'runtime'), logs = path.join(root, 'logs');
+  await Promise.all([bin, runtime, logs].map(directory => mkdir(directory, { mode: 0o700 })));
+  const component = path.join(bin, 'component');
+  await writeFile(component, `#!/bin/bash
+set -eu
+name="\${0##*/}"
+printf '%s\\0' "$$" "$@" > "$ARL_TEST_LOG/$name"
+case "$name" in
+  xauth) cat >/dev/null; exit 0 ;;
+  mcookie) printf '%s\\n' 0123456789abcdef0123456789abcdef; exit 0 ;;
+  xdpyinfo|curl|python3) exit 0 ;;
+esac
+trap 'exit 0' TERM INT
+while true; do sleep 0.1 & wait "$!" || true; done
+`);
+  await chmod(component, 0o700);
+  const binaries = ['Xvfb', 'Xtigervnc', 'x11vnc', 'openbox', 'websockify', 'xauth', 'mcookie', 'xdpyinfo', 'curl', 'python3'];
+  await Promise.all(binaries.map(binary => symlink(component, path.join(bin, binary))));
+  const env = { ...process.env, PATH: `${bin}:/usr/bin:/bin`,
+    REGION_LAB_DISPLAY: ':200', REGION_LAB_VNC_PORT: '5902', REGION_LAB_DESKTOP_PORT: '6101',
+    XDG_RUNTIME_DIR: runtime, XAUTHORITY: path.join(runtime, 'Xauthority'),
+    ARL_TEST_LOG: logs };
+  delete env.REGION_LAB_DESKTOP_BACKEND;
+  delete env.REGION_LAB_DESKTOP_FRAME_RATE;
+  if (backend !== undefined) env.REGION_LAB_DESKTOP_BACKEND = backend;
+  if (frameRate !== undefined) env.REGION_LAB_DESKTOP_FRAME_RATE = frameRate;
+  const script = fileURLToPath(new URL('../deploy/linux/start-desktop.sh', import.meta.url));
+  const child = spawn('/bin/bash', [script], { env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  const owned = trackOwnedProcess(child, true);
+  let stdout = '', stderr = '';
+  child.stdout.on('data', chunk => { stdout += chunk; });
+  child.stderr.on('data', chunk => { stderr += chunk; });
+  const exited = new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.once('close', (code, signal) => resolve({ code, signal }));
+  });
+  t.after(async () => {
+    await stopOwnedProcess(owned, 7000, 2000);
+    await rm(root, { recursive: true, force: true });
+  });
+  return { child, owned, exited, logs, runtime,
+    output: () => ({ stdout, stderr }),
+    args: async name => (await readFile(path.join(logs, name), 'utf8')).split('\0').slice(1, -1),
+    ready: async () => {
+      const deadline = Date.now() + 10000;
+      while (!stdout.split(/\r?\n/).includes('REGION_LAB_DESKTOP_READY')) {
+        if (!owned.alive() || Date.now() > deadline) throw new Error(`Desktop test did not become ready: ${stderr}`);
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+    },
+  };
+}
+
+test('Linux launcher defaults to the unchanged x11vnc stack and cleans its process group', { skip: skipLauncher }, async t => {
+  const f = await launcherFixture(t);
+  await f.ready();
+  assert.deepEqual(await f.args('Xvfb'), [':200', '-screen', '0', '1280x800x24', '-nolisten', 'tcp', '-auth', path.join(f.runtime, 'Xauthority'), '-noreset']);
+  assert.deepEqual(await f.args('x11vnc'), ['-display', ':200', '-auth', path.join(f.runtime, 'Xauthority'), '-listen', '127.0.0.1', '-rfbport', '5902', '-localhost', '-forever', '-shared', '-nopw', '-noxdamage', '-repeat', '-wait', '50', '-defer', '50']);
+  assert.ok(!(await readdir(f.logs)).includes('Xtigervnc'));
+  assert.equal((await stopOwnedProcess(f.owned, 7000, 2000)).ok, true);
+  assert.equal(f.owned.alive(), false);
+});
+
+test('Linux TigerVNC launcher keeps private X auth, loopback RFB and the same readiness contract', { skip: skipLauncher }, async t => {
+  const f = await launcherFixture(t, { backend: 'tigervnc' });
+  await f.ready();
+  assert.deepEqual(await f.args('Xtigervnc'), [':200', '-geometry', '1280x800', '-depth', '24', '-nolisten', 'tcp', '-auth', path.join(f.runtime, 'Xauthority'), '-noreset', '-localhost', '-interface', '127.0.0.1', '-UseIPv6=0', '-rfbport', '5902', '-SecurityTypes', 'None', '-AlwaysShared', '-FrameRate', '20', '-CompareFB', '2']);
+  assert.deepEqual(await f.args('websockify'), ['--web', '/usr/share/novnc', '127.0.0.1:6101', '127.0.0.1:5902']);
+  assert.deepEqual(await f.args('openbox'), ['--sm-disable']);
+  const names = await readdir(f.logs);
+  assert.ok(!names.includes('Xvfb') && !names.includes('x11vnc'));
+  assert.equal((await stopOwnedProcess(f.owned, 7000, 2000)).ok, true);
+  assert.equal(f.owned.alive(), false);
+});
+
+test('Linux launcher accepts bounded TigerVNC frame rates', { skip: skipLauncher }, async t => {
+  for (const frameRate of ['5', '30']) await t.test(frameRate, async t => {
+    const f = await launcherFixture(t, { backend: 'tigervnc', frameRate });
+    await f.ready();
+    const args = await f.args('Xtigervnc');
+    assert.equal(args[args.indexOf('-FrameRate') + 1], frameRate);
+  });
+});
+
+test('Linux launcher rejects unknown backends and invalid frame rates before starting components', { skip: skipLauncher }, async t => {
+  for (const config of [{ backend: '' }, { backend: 'other' }, ...['', '4', '31', '1.5', '05', '20;true'].map(frameRate => ({ backend: 'tigervnc', frameRate }))]) {
+    await t.test(JSON.stringify(config), async t => {
+      const f = await launcherFixture(t, config);
+      assert.equal((await f.exited).code, 1);
+      assert.deepEqual(await readdir(f.logs), []);
+      assert.ok(!f.output().stdout.includes('REGION_LAB_DESKTOP_READY'));
+      assert.match(f.output().stderr, /must be/);
+    });
+  }
+});
+
+test('Linux desktop component failure exits and cleans the remaining owned processes', { skip: skipLauncher }, async t => {
+  const f = await launcherFixture(t, { backend: 'tigervnc' });
+  await f.ready();
+  const pid = Number((await readFile(path.join(f.logs, 'Xtigervnc'), 'utf8')).split('\0')[0]);
+  process.kill(pid, 'SIGTERM');
+  assert.equal((await f.exited).code, 1);
+  assert.match(f.output().stderr, /desktop component stopped/i);
+  await until(() => !f.owned.alive());
 });

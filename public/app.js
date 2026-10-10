@@ -16,6 +16,7 @@ let selectedRemoteProfileId = null;
 let remoteViewerOpen = false;
 let remoteSelectorSignature = '';
 const launchingProfiles = new Set();
+const recentPageRequests = new Map();
 let loadingCatalog = false;
 let catalogData = null;
 let catalogRefreshTimer = null;
@@ -129,6 +130,15 @@ function closeRemoteDesktop() {
   $('#open-remote-desktop').setAttribute('aria-expanded', 'false');
 }
 
+function detachInlineDesktop(profileId, event) {
+  if (event.defaultPrevented || ![0, 1].includes(event.button)) return;
+  // Let the browser follow the link first. Only disconnect a duplicate viewer
+  // for this environment; an inline view of another environment stays open.
+  window.setTimeout(() => {
+    if (remoteViewerOpen && selectedRemoteProfileId === profileId) closeRemoteDesktop();
+  }, 0);
+}
+
 function renderRemoteDesktop() {
   const available = state.profiles.filter((profile) => remoteDesktopPath(profile));
   const selected = available.find((profile) => profile.id === selectedRemoteProfileId) || available[0];
@@ -197,7 +207,7 @@ function renderRuntimeLocation() {
   const capacity = remoteCapacity();
   $('#remote-session-summary').hidden = !remote;
   $('#remote-session-summary').textContent = `运行中 ${capacity.active} / ${capacity.limit}${capacity.starting ? ` · 正在启动 ${capacity.starting} 个` : ''}`;
-  $('#remote-browser-note').textContent = `最多同时运行 ${capacity.limit} 个环境；每个环境独立连接。切换或收起画面只断开当前画面，浏览器继续运行。点击“独立窗口”可同时操作多个环境，关闭其中一个浏览器不影响其他环境。`;
+  $('#remote-browser-note').textContent = `最多同时运行 ${capacity.limit} 个环境。继续使用会保留现有标签；快捷入口会新开标签，已有页面请直接切换标签。独立窗口会收起同一环境的内嵌画面，减少重复传输；其他环境的画面保留。收起画面不会停止浏览器，实际流畅度取决于页面负载和服务器资源。`;
   renderRemoteDesktop();
 }
 
@@ -226,6 +236,9 @@ async function api(path, options = {}) {
 }
 
 function operationStatus(profile) {
+  if (!operationStates.has(profile.id) && remoteBrowserEnabled() && profile.session?.active) {
+    return { type: 'info', message: '浏览器正在运行。点击“继续使用”连接现有画面；已打开的 Gmail 等页面请在浏览器内切换标签。' };
+  }
   return operationStates.get(profile.id) || { type: 'info', message: profile.proxy
     ? remoteBrowserEnabled() ? '下一步：点击“登录 Google 账号”。会先检查出口，再启动服务器浏览器；点击“打开远程浏览器”完成登录。' : '下一步：点击“登录 Google 账号”。会先检查出口，再在本机独立 Chrome / Edge 窗口中打开登录页。'
     : '第一步：配置此账号的代理地址。点击“登录 Google 账号”可进入设置。' };
@@ -420,22 +433,26 @@ function renderProfile(profile) {
   card.append(cycleTitle, track, meta);
 
   const actions = element('div', 'profile-actions');
-  const launch = actionButton('登录 Google 账号 ↗', 'button button-primary signin-button', (button) => launchTarget(profile, 'signin', button), busy, `在${profile.label}环境登录Google账号`);
+  const canResume = remoteBrowserEnabled() && profile.session?.active;
+  const launch = actionButton(canResume ? '继续使用 ↗' : '登录 Google 账号 ↗', 'button button-primary signin-button',
+    (button) => canResume ? resumeProfile(profile, button) : launchTarget(profile, 'signin', button), busy,
+    canResume ? `继续使用${profile.label}` : `在${profile.label}环境登录Google账号`);
   actions.append(launch, actionButton('＋ 记录地区', 'button button-outline', () => openObservationDialog(profile), busy));
   const quick = element('div', 'quick-links');
   quick.append(
-    actionButton('Gmail ↗', 'quick-link', (button) => launchTarget(profile, 'gmail', button), busy, `在${profile.label}环境打开Gmail`),
-    actionButton('YouTube ↗', 'quick-link', (button) => launchTarget(profile, 'youtube', button), busy, `在${profile.label}环境打开YouTube`),
-    actionButton('条款页 / 查看地区 ↗', 'quick-link', (button) => launchTarget(profile, 'terms', button), busy, `在${profile.label}环境打开Google服务条款页`),
-    actionButton('官方变更申请 ↗', 'quick-link', (button) => launchTarget(profile, 'appeal', button), busy, `在${profile.label}环境打开官方国家地区变更申请`)
+    actionButton(remoteBrowserEnabled() ? 'Gmail · 新标签 ↗' : 'Gmail ↗', 'quick-link', (button) => launchTarget(profile, 'gmail', button), busy, `在${profile.label}环境${remoteBrowserEnabled() ? '新标签中' : ''}打开Gmail`),
+    actionButton(remoteBrowserEnabled() ? 'YouTube · 新标签 ↗' : 'YouTube ↗', 'quick-link', (button) => launchTarget(profile, 'youtube', button), busy, `在${profile.label}环境${remoteBrowserEnabled() ? '新标签中' : ''}打开YouTube`),
+    actionButton(remoteBrowserEnabled() ? '条款页 · 新标签 ↗' : '条款页 / 查看地区 ↗', 'quick-link', (button) => launchTarget(profile, 'terms', button), busy, `在${profile.label}环境${remoteBrowserEnabled() ? '新标签中' : ''}打开Google服务条款页`),
+    actionButton(remoteBrowserEnabled() ? '变更申请 · 新标签 ↗' : '官方变更申请 ↗', 'quick-link', (button) => launchTarget(profile, 'appeal', button), busy, `在${profile.label}环境${remoteBrowserEnabled() ? '新标签中' : ''}打开官方国家地区变更申请`)
   );
   card.append(actions, quick);
+  if (remoteBrowserEnabled()) card.append(element('p', 'field-help', '快捷入口会新开标签。页面已经打开时，请“继续使用”并切换已有标签，避免重复加载。'));
   const operation = operationStatus(profile);
   const feedback = element('p', `operation-status ${operation.type}`, operation.message);
   feedback.setAttribute('role', 'status');
   card.append(feedback);
   const management = element('div', 'management-actions');
-  management.append(actionButton('检查 / 退出其他设备', 'button button-small button-outline', () => openDevicesDialog(profile), busy), actionButton('环境诊断 ↗', 'button button-small button-quiet', (button) => launchTarget(profile, 'diagnostics', button), busy));
+  management.append(actionButton('检查 / 退出其他设备', 'button button-small button-outline', () => openDevicesDialog(profile), busy), actionButton(remoteBrowserEnabled() ? '环境诊断 · 新标签 ↗' : '环境诊断 ↗', 'button button-small button-quiet', (button) => launchTarget(profile, 'diagnostics', button), busy));
   if (profile.launches?.length || profileLocked(profile)) management.append(actionButton('复制为新环境', 'button button-small button-quiet', () => openProfileDialog(null, { template: profile }), busy));
   if (remoteBrowserEnabled() && profile.session?.active) {
     management.append(actionButton('打开远程浏览器', 'button button-small button-primary', () => openRemoteDesktop(profile.id), false, `打开${profile.label}的远程浏览器`));
@@ -444,6 +461,7 @@ function renderProfile(profile) {
       const link = element('a', 'button button-small button-outline', '独立窗口 ↗');
       link.href = path; link.target = '_blank'; link.rel = 'noopener noreferrer';
       link.setAttribute('aria-label', `在独立窗口打开${profile.label}`);
+      for (const eventName of ['click', 'auxclick']) link.addEventListener(eventName, event => detachInlineDesktop(profile.id, event));
       management.append(link);
     }
   }
@@ -480,11 +498,9 @@ async function profileAction(profile, button, path, body, onSuccess, progress = 
   render();
   try {
     const result = await api(`/api/profiles/${encodeURIComponent(profile.id)}/${path}`, { method: 'POST', body: JSON.stringify(body) });
-    pending.delete(profile.id);
     await loadState({ fresh: true }).catch(() => {});
     onSuccess?.(result);
   } catch (error) {
-    pending.delete(profile.id);
     await loadState({ fresh: true }).catch(() => {});
     setOperationStatus(profile, error.message, 'error');
   } finally {
@@ -493,6 +509,14 @@ async function profileAction(profile, button, path, body, onSuccess, progress = 
     button.textContent = original;
     render();
   }
+}
+
+function resumeProfile(profile, button) {
+  return profileAction(profile, button, 'resume', {}, (result) => {
+    if (result.profile?.id === profile.id) state.profiles = state.profiles.map(item => item.id === profile.id ? result.profile : item);
+    setOperationStatus(profile, '已连接现有浏览器画面，原有标签保持不变。', 'success');
+    openRemoteDesktop(profile.id);
+  }, '正在连接现有浏览器画面…');
 }
 
 function checkNetwork(profile, button) {
@@ -508,14 +532,22 @@ function checkNetwork(profile, button) {
 }
 
 async function launchTarget(profile, target, button) {
+  if (pending.has(profile.id)) return;
+  const requestKey = `${profile.id}:${target}`;
+  if (remoteBrowserEnabled() && profile.session?.active && Date.now() - (recentPageRequests.get(requestKey) || 0) < 3000) {
+    setOperationStatus(profile, '刚刚已发送此页面的打开请求，请查看浏览器中的标签。', 'info');
+    openRemoteDesktop(profile.id);
+    return;
+  }
   if (!prepareNetworkAction(profile, { browser: true })) return;
   const remote = remoteBrowserEnabled();
   const names = { signin: 'Google 登录页', gmail: 'Gmail', youtube: 'YouTube', terms: 'Google 服务条款页', appeal: '官方国家/地区变更申请', devices: 'Google 官方设备管理页', diagnostics: `${remote ? '服务器' : '本机'}环境诊断页（未执行出口国家检查）` };
-  if (pending.has(profile.id)) return;
   launchingProfiles.add(profile.id);
   try { return await profileAction(profile, button, 'launch', { target }, (result) => {
+    if (remote) recentPageRequests.set(requestKey, Date.now());
     setOperationStatus(profile, remote
-      ? `已向服务器浏览器发送打开${names[target]}的请求。点击“打开远程浏览器”查看画面并完成操作；尚未确认 Google 登录状态。`
+      ? result.resumed ? '已连接现有浏览器画面，原有标签保持不变。'
+        : `已向服务器浏览器发送在新标签打开${names[target]}的请求。已有页面请直接切换标签；尚未确认 Google 登录状态。`
       : result.message || `已发送打开${names[target]}的请求；尚未确认页面加载或登录状态。`, 'success');
     if (remote) {
       if (result.profile?.id === profile.id) {
@@ -601,7 +633,7 @@ function openDevicesDialog(profile) {
   $('#devices-form').reset();
   $('#devices-context').textContent = `当前环境：${profile.label}${profile.accountLabel ? ` · 账号代号：${profile.accountLabel}` : ''}。以下确认由你填写，工具不会自动读取设备列表。`;
   $('#open-devices').disabled = pending.has(profile.id);
-  $('#open-devices').textContent = profile.proxy ? '在此环境打开官方设备页 ↗' : '先配置代理，再打开设备页 ↗';
+  $('#open-devices').textContent = profile.proxy ? remoteBrowserEnabled() ? '在新标签打开官方设备页 ↗' : '在此环境打开官方设备页 ↗' : '先配置代理，再打开设备页 ↗';
   $('#devices-launch-status').hidden = true;
   $('#devices-form-error').hidden = true;
   $('#devices-dialog').showModal();
@@ -1441,6 +1473,7 @@ $('#hide-remote-desktop').addEventListener('click', () => {
   closeRemoteDesktop();
   $('#open-remote-desktop').focus();
 });
+for (const eventName of ['click', 'auxclick']) $('#remote-desktop-tab').addEventListener(eventName, event => detachInlineDesktop(selectedRemoteProfileId, event));
 function updateCountryDefaults() {
   if (editingProfileId) return;
   const defaults = environmentDefaults[$('#profile-country').value.toUpperCase()];

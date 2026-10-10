@@ -20,7 +20,22 @@ if [[ ! $DISPLAY =~ ^:20[0-4]$ || ! $vnc_port =~ ^590[2-6]$ || ! $desktop_port =
   exit 1
 fi
 
-for binary in Xvfb xauth xdpyinfo openbox x11vnc websockify mcookie curl python3 timeout; do
+desktop_backend="${REGION_LAB_DESKTOP_BACKEND-x11vnc}"
+frame_rate="${REGION_LAB_DESKTOP_FRAME_RATE-20}"
+case "$desktop_backend" in
+  x11vnc) backend_binaries=(Xvfb x11vnc) ;;
+  tigervnc) backend_binaries=(Xtigervnc) ;;
+  *)
+    printf '%s\n' 'REGION_LAB_DESKTOP_BACKEND must be x11vnc or tigervnc.' >&2
+    exit 1
+    ;;
+esac
+if [[ ! $frame_rate =~ ^([5-9]|[12][0-9]|30)$ ]]; then
+  printf '%s\n' 'REGION_LAB_DESKTOP_FRAME_RATE must be an integer between 5 and 30.' >&2
+  exit 1
+fi
+
+for binary in "${backend_binaries[@]}" xauth xdpyinfo openbox websockify mcookie curl python3 timeout; do
   if ! command -v "$binary" >/dev/null; then
     printf 'Missing desktop dependency: %s\n' "$binary" >&2
     exit 1
@@ -52,7 +67,15 @@ cookie=$(mcookie)
 printf 'add %s MIT-MAGIC-COOKIE-1 %s\n' "$DISPLAY" "$cookie" | xauth -f "$XAUTHORITY" source -
 unset cookie
 
-Xvfb "$DISPLAY" -screen 0 1280x800x24 -nolisten tcp -auth "$XAUTHORITY" -noreset >&2 &
+if [[ $desktop_backend == tigervnc ]]; then
+  # Xtigervnc owns the X display and RFB server together. Keep the geometry,
+  # private X authority and loopback-only gateway path identical across backends.
+  Xtigervnc "$DISPLAY" -geometry 1280x800 -depth 24 -nolisten tcp -auth "$XAUTHORITY" -noreset \
+    -localhost -interface 127.0.0.1 -UseIPv6=0 -rfbport "$vnc_port" \
+    -SecurityTypes None -AlwaysShared -FrameRate "$frame_rate" -CompareFB 2 >&2 &
+else
+  Xvfb "$DISPLAY" -screen 0 1280x800x24 -nolisten tcp -auth "$XAUTHORITY" -noreset >&2 &
+fi
 pids+=("$!")
 display_ready=0
 display_deadline=$((SECONDS + 8))
@@ -64,14 +87,16 @@ while ((SECONDS < display_deadline)); do
   sleep 0.1
 done
 if (( ! display_ready )); then
-  printf '%s\n' 'Xvfb did not become ready with the private X authority.' >&2
+  printf '%s\n' 'The X server did not become ready with the private X authority.' >&2
   exit 1
 fi
 
 openbox --sm-disable >&2 &
 pids+=("$!")
-x11vnc -display "$DISPLAY" -auth "$XAUTHORITY" -listen 127.0.0.1 -rfbport "$vnc_port" -localhost -forever -shared -nopw -noxdamage -repeat -wait 50 -defer 50 >&2 &
-pids+=("$!")
+if [[ $desktop_backend == x11vnc ]]; then
+  x11vnc -display "$DISPLAY" -auth "$XAUTHORITY" -listen 127.0.0.1 -rfbport "$vnc_port" -localhost -forever -shared -nopw -noxdamage -repeat -wait 50 -defer 50 >&2 &
+  pids+=("$!")
+fi
 websockify --web /usr/share/novnc "127.0.0.1:$desktop_port" "127.0.0.1:$vnc_port" >&2 &
 pids+=("$!")
 
