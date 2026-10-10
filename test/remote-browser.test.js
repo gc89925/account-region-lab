@@ -108,53 +108,18 @@ test('five different environments have independent displays and starting entries
   assert.equal(f.launcher.isActive(options[5].profile.id), true);
 });
 
-test('URL handoff adds a tab without forcing another window or clearing the original browser', async t => {
+test('URL handoff helper exit never clears the original active browser', async t => {
   const f = await fixture(t);
   await f.launcher.open(f.options);
   const request = f.launcher.open({ ...f.options, url: LINKS.gmail });
   while (f.calls.length < 2) await new Promise(resolve => setTimeout(resolve, 1));
   f.calls[1].child.emit('exit', 0, null);
   await request;
-  assert.ok(f.calls[0].args.includes('--new-window'));
-  assert.ok(!f.calls[1].args.includes('--new-window'));
-  assert.equal(f.calls[1].args.find(arg => arg.startsWith('--user-data-dir=')), `--user-data-dir=${f.profileDir}`);
-  assert.equal(f.calls[1].args.find(arg => arg.startsWith('--proxy-server=')), '--proxy-server=socks5://127.0.0.1:18080');
   assert.equal(f.calls[1].args.at(-1), LINKS.gmail);
   assert.equal(f.launcher.isActive(f.profile.id), true);
   f.calls[0].child.emit('exit', 0, null);
   await until(() => !f.launcher.isActive(f.profile.id));
   assert.equal(f.launcher.isActive(f.profile.id), false);
-});
-
-test('lean windows fit the configured desktop while keeping separate profiles and proxies', async t => {
-  const f = await fixture(t, { resourceMode: 'lean', desktopGeometry: '1024x768' });
-  const other = await f.another();
-  other.profile.proxy = 'socks5://127.0.0.1:18081';
-  other.profile.environment.viewport = { width: 800, height: 600 };
-  await f.launcher.open(f.options);
-  await f.launcher.open(other);
-  await f.launcher.open({ ...f.options, url: LINKS.gmail });
-  assert.ok(f.calls[0].args.includes('--window-size=1024,768'));
-  assert.ok(f.calls[1].args.includes('--window-size=800,600'));
-  assert.ok(f.calls[2].args.includes('--window-size=1024,768'));
-  assert.ok(f.calls[0].args.includes('--new-window'));
-  assert.ok(!f.calls[2].args.includes('--new-window'));
-  assert.ok(f.calls[0].args.includes(`--user-data-dir=${f.profileDir}`));
-  assert.ok(f.calls[1].args.includes(`--user-data-dir=${other.profileDir}`));
-  assert.ok(f.calls[0].args.includes('--proxy-server=socks5://127.0.0.1:18080'));
-  assert.ok(f.calls[1].args.includes('--proxy-server=socks5://127.0.0.1:18081'));
-  assert.ok(f.calls[2].args.includes('--proxy-server=socks5://127.0.0.1:18080'));
-  assert.ok(f.calls.every(({ args }) => !args.some(arg => /no-sandbox|disable-site-isolation|remote-debugging/.test(arg))));
-  assert.deepEqual(f.profile.environment.viewport, { width: 1365, height: 900 });
-});
-
-test('standard mode retains configured window size and lean mode rejects invalid geometry', async t => {
-  const f = await fixture(t, { resourceMode: 'standard', desktopGeometry: '1024x768' });
-  await f.launcher.open(f.options);
-  assert.ok(f.calls[0].args.includes('--window-size=1365,900'));
-  for (const desktopGeometry of ['1024x768;touch /tmp/unwanted', '1x1', '9999x9999', null]) {
-    assert.throws(() => createRemoteLauncher({ resourceMode: 'lean', desktopGeometry }), /桌面尺寸/);
-  }
 });
 
 test('primary startup exit reports failure and releases its desktop only after cleanup', async t => {

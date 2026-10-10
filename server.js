@@ -14,10 +14,9 @@ import { createSocksBridge } from './lib/socks-bridge.js';
 import { createRemoteLauncher } from './lib/remote-browser.js';
 import { inspectProxySession, prepareProxySession, applyProxySessionOptions } from './public/proxy-session.js';
 import { sampleProxyStability, createStabilityHistory } from './lib/proxy-stability.js';
-import { readServerResources } from './lib/server-resources.js';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
-const VERSION = '0.8.0';
+const VERSION = '0.7.0';
 
 function respond(res, status, data) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -106,7 +105,7 @@ export function createLabServer({ dataDir = process.env.REGION_LAB_DATA_DIR || d
       catch { sessionSummaries.set(p.id, { envelope:p.proxyAuth, proxy:p.proxy, summary:null }); }
     }));
     const profiles = state.profiles.map(displayProfile);
-    return { version: VERSION, profiles, browser, token, links: LINKS, ...(remoteMode ? {serverResources:readServerResources(),remoteSessions:{limit:maxRemoteEnvironments, active:profiles.filter(p => p.session.desktopUrl).length, starting:profiles.filter(p => p.session.starting).length}} : {}), capabilities: { remoteBrowser:remoteMode, ...(remoteMode ? {maxRemoteEnvironments} : {}), managed: !remoteMode, devices: 'manual-review', catalog: 'VPN Gate metadata only' } };
+    return { version: VERSION, profiles, browser, token, links: LINKS, ...(remoteMode ? {remoteSessions:{limit:maxRemoteEnvironments, active:profiles.filter(p => p.session.desktopUrl).length, starting:profiles.filter(p => p.session.starting).length}} : {}), capabilities: { remoteBrowser:remoteMode, ...(remoteMode ? {maxRemoteEnvironments} : {}), managed: !remoteMode, devices: 'manual-review', catalog: 'VPN Gate metadata only' } };
   };
 
   async function readAuth(body, profile, proxy) {

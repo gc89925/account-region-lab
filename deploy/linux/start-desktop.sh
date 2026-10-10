@@ -2,25 +2,6 @@
 set -Eeuo pipefail
 umask 077
 
-geometry="${REGION_LAB_DESKTOP_GEOMETRY:-1280x800}"
-damage="${REGION_LAB_X11VNC_DAMAGE:-1}"
-if [[ ! $geometry =~ ^([1-9][0-9]{3})x([1-9][0-9]{2,3})$ ]]; then
-  printf '%s\n' 'Invalid desktop geometry; use WIDTHxHEIGHT within 1024x640 and 1920x1200.' >&2
-  exit 1
-fi
-if (( BASH_REMATCH[1] < 1024 || BASH_REMATCH[1] > 1920 || BASH_REMATCH[2] < 640 || BASH_REMATCH[2] > 1200 )); then
-  printf '%s\n' 'Invalid desktop geometry; use WIDTHxHEIGHT within 1024x640 and 1920x1200.' >&2
-  exit 1
-fi
-if [[ $damage != 0 && $damage != 1 ]]; then
-  printf '%s\n' 'REGION_LAB_X11VNC_DAMAGE must be 0 or 1.' >&2
-  exit 1
-fi
-# DAMAGE avoids unnecessary polling on mostly static pages. Keep an explicit
-# fallback for X servers that fail to report screen updates correctly.
-damage_args=(-xdamage)
-if [[ $damage == 0 ]]; then damage_args=(-noxdamage); fi
-
 if [[ $(id -u) -eq 0 ]]; then
   printf '%s\n' 'Run the desktop as the dedicated non-root regionlab user.' >&2
   exit 1
@@ -71,7 +52,7 @@ cookie=$(mcookie)
 printf 'add %s MIT-MAGIC-COOKIE-1 %s\n' "$DISPLAY" "$cookie" | xauth -f "$XAUTHORITY" source -
 unset cookie
 
-Xvfb "$DISPLAY" -screen 0 "${geometry}x24" -nolisten tcp -auth "$XAUTHORITY" -noreset >&2 &
+Xvfb "$DISPLAY" -screen 0 1280x800x24 -nolisten tcp -auth "$XAUTHORITY" -noreset >&2 &
 pids+=("$!")
 display_ready=0
 display_deadline=$((SECONDS + 8))
@@ -89,7 +70,7 @@ fi
 
 openbox --sm-disable >&2 &
 pids+=("$!")
-x11vnc -display "$DISPLAY" -auth "$XAUTHORITY" -listen 127.0.0.1 -rfbport "$vnc_port" -localhost -forever -shared -nopw "${damage_args[@]}" -repeat -wait 100 -defer 100 >&2 &
+x11vnc -display "$DISPLAY" -auth "$XAUTHORITY" -listen 127.0.0.1 -rfbport "$vnc_port" -localhost -forever -shared -nopw -noxdamage -repeat -wait 50 -defer 50 >&2 &
 pids+=("$!")
 websockify --web /usr/share/novnc "127.0.0.1:$desktop_port" "127.0.0.1:$vnc_port" >&2 &
 pids+=("$!")

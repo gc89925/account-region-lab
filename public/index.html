@@ -56,15 +56,13 @@
 
       <section id="remote-browser" class="section-block remote-browser-panel" aria-labelledby="remote-browser-title" hidden>
         <div class="section-heading"><div><p class="eyebrow">REMOTE BROWSER</p><h2 id="remote-browser-title">远程浏览器</h2><p id="remote-browser-context">在这里操作服务器上的浏览器，完成 Google 登录。</p></div><div class="remote-browser-actions"><a id="remote-desktop-tab" class="button button-small button-outline" target="_blank" rel="noopener noreferrer" hidden>独立窗口 ↗</a><button id="hide-remote-desktop" class="button button-small button-outline" type="button">收起画面</button></div></div>
-        <p id="remote-browser-note" class="remote-browser-note">各环境使用独立远程画面。收起画面不释放浏览器内存；暂时不用时可关闭浏览器，登录资料会保留。</p>
+        <p id="remote-browser-note" class="remote-browser-note">各环境使用独立远程画面。切换或收起画面只断开当前画面，浏览器继续运行。</p>
         <div id="remote-environment-selector" class="remote-environment-selector" role="group" aria-label="选择远程浏览器环境"></div>
         <div id="remote-desktop-frame-container" class="remote-desktop-frame-container"></div>
       </section>
 
       <section id="environments" class="section-block" aria-labelledby="environments-title">
         <div class="section-heading"><div><p class="eyebrow">01 / ENVIRONMENTS</p><h2 id="environments-title">独立环境</h2><p id="remote-session-summary" class="remote-session-summary" role="status" hidden></p></div><button id="refresh" class="button button-small button-outline" type="button"><span aria-hidden="true">↻</span> 刷新状态</button></div>
-        <div id="server-resource-status" class="server-resource-status" role="status" hidden></div>
-        <p id="remote-performance-hint" class="remote-performance-hint" hidden>登录、Gmail 等快捷按钮每次会新增标签。重复查看时直接切换远程浏览器中的已有标签；关闭不用的标签，或关闭整个环境，可以释放内存，登录资料会保留。</p>
         <div class="getting-started"><strong>从这里登录 Google</strong><span>① 编辑代理地址</span><span>② 点击“登录 Google 账号”</span><span id="signin-step-location">③ 到本机浏览器窗口登录</span><p>本页管理环境；邮箱、密码和验证码均在 Google 官方页面输入。</p></div>
         <div id="profile-grid" class="profile-grid" aria-live="polite"><div class="empty-state loading-state">正在读取本机环境…</div></div>
         <p class="section-footnote"><span aria-hidden="true">↳</span> 每个环境有独立的浏览器配置与会话；它不是虚拟机，也不能保证改变账号关联地区。</p>
