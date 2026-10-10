@@ -12,7 +12,8 @@
 
 | 策略 | 设置 | 效果 |
 | --- | --- | --- |
-| `HighEfficiencyModeEnabled` | `false` | 默认关闭主动回收后台标签，避免小主机反复重载页面；按实际负载单独评估启用 |
+| `HighEfficiencyModeEnabled` | `true` | 开启内存节省程序，允许回收符合条件的后台标签 |
+| `MemorySaverModeSavings` | `2` | 最大节省档，让后台标签更早进入非活动状态；需要 Chrome 126 或以上 |
 | `NetworkPredictionOptions` | `2` | 关闭 DNS 预取、连接预热和页面预渲染 |
 | `BackgroundModeEnabled` | `false` | 关闭最后一个浏览器窗口后，不继续运行 Chrome 后台应用 |
 | `AutoplayAllowed` | `false` | 限制媒体自动播放；正在打开的标签需要重新打开才应用此项变化 |
@@ -32,7 +33,7 @@ else
 fi
 ```
 
-保存浏览器中正在进行的操作，然后在工作台关闭并重新打开环境。在远程浏览器地址栏输入 `chrome://policy`，点击重新加载策略，确认以上四项被识别且没有错误。`chrome://settings/performance` 可以查看内存节省设置。v0.8.0 曾默认最大档回收；现场用户反馈更卡后撤回，不能仅凭临时空白页面测试认定该档能改善真实网页。
+保存浏览器中正在进行的操作，然后在工作台关闭并重新打开环境。在远程浏览器地址栏输入 `chrome://policy`，点击重新加载策略，确认以上五项被识别且没有错误。`chrome://settings/performance` 可以查看内存节省设置。
 
 回退时只移除本项目安装的策略文件，然后重新打开环境：
 
