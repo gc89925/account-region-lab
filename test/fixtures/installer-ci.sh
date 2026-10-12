@@ -55,11 +55,18 @@ trap cleanup EXIT
 
 progress() { PHASE=$1; printf 'Installer integration: %s\n' "$PHASE"; }
 assert_healthy() {
-  systemctl is-active --quiet account-region-lab.service account-region-lab-gateway.service account-region-lab-certificate.timer
+  local ready=0 attempt
   for unit in account-region-lab.service account-region-lab-gateway.service account-region-lab-certificate.timer; do
+    systemctl is-active --quiet "$unit"
     [[ $(systemctl is-enabled "$unit") == enabled ]]
   done
-  [[ $(/usr/bin/curl --noproxy '*' --max-time 15 -sS -o /dev/null -w '%{http_code}' https://lab.example.com/login) == 200 ]]
+  # Type=exec confirms execve(), not HTTP readiness. Rollback starts the old
+  # processes afresh, so give their listeners a bounded chance to become ready.
+  for attempt in {1..20}; do
+    if [[ $(/usr/bin/curl --noproxy '*' --max-time 3 -s -o /dev/null -w '%{http_code}' https://lab.example.com/login) == 200 ]]; then ready=1; break; fi
+    sleep 1
+  done
+  ((ready))
   [[ $(/usr/bin/curl --noproxy '*' --max-time 15 -sS -o /dev/null -w '%{http_code}' https://lab.example.com/api/state) == 401 ]]
   python3 - <<'PY'
 import subprocess
@@ -102,6 +109,27 @@ run_install() {
   # Invoke the real executable script, rather than sourcing/replacing its helper
   # functions. The installer resolves and downloads this exact published commit.
   bash "$REPO/deploy/linux/install.sh" --host lab.example.com --ref "$REF" "$@" > "$log" 2>&1
+}
+chrome_failure_details() {
+  # This browser visits only synthetic local HTML. Show a bounded, scrubbed
+  # diagnostic excerpt without exposing complete logs, inherited env or secrets.
+  python3 - "$WORK/chrome.log" "$RECEIPT" <<'PY'
+import pathlib,re,sys
+receipt=pathlib.Path(sys.argv[2])
+password=dict(line.split(': ',1) for line in receipt.read_text().splitlines()).get('Password','')
+shown=0
+for line in pathlib.Path(sys.argv[1]).read_text(errors='replace').splitlines():
+    if not re.search(r'FATAL|ERROR|sandbox|SIG',line,re.I): continue
+    if password: line=line.replace(password,'[redacted]')
+    line=re.sub(r'(?:https?|wss?|socks5?)://[^\s<>]+|data:[^\s]+','[URL]',line,flags=re.I)
+    line=re.sub(r'[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}','[email]',line,flags=re.I)
+    line=re.sub(r'\b(?:\d{1,3}\.){3}\d{1,3}\b','[IP]',line)
+    line=re.sub(r'[\x00-\x1f\x7f]',' ',line)
+    print(line[:500])
+    shown+=1
+    if shown==12: break
+if not shown: print('Chrome produced no matching FATAL/ERROR/sandbox/SIG diagnostic lines.')
+PY
 }
 
 progress 'creating temporary local TLS trust'
@@ -172,12 +200,28 @@ systemctl start account-region-lab-certificate.service
 [[ -s $ROOT/ci-fixture/renewals ]]
 
 progress 'non-root Chrome with its sandbox enabled'
-install -d -o regionlab -g regionlab -m 0700 "$DATA_HOME/ci-chrome-smoke"
-runuser -u regionlab -- env HOME="$DATA_HOME" XDG_RUNTIME_DIR=/run/account-region-lab \
-  timeout --kill-after=5s 45s /usr/bin/google-chrome --headless --disable-gpu --no-first-run --no-default-browser-check \
-  --user-data-dir="$DATA_HOME/ci-chrome-smoke" --dump-dom 'data:text/html,<title>arl-ci-rendered</title><p>Local browser test</p>' \
-  > "$WORK/chrome.log" 2>&1
-grep -Fq '<title>arl-ci-rendered</title>' "$WORK/chrome.log"
+install -d -o regionlab -g regionlab -m 0700 "$DATA_HOME/ci-chrome-smoke" "$DATA_HOME/.config" "$DATA_HOME/.cache"
+chrome_status=0
+(
+  cd -- "$DATA_HOME"
+  # A clean allowlisted environment avoids runner-specific Chrome overrides and
+  # root XDG paths. Crash reporting and caches must be writable by regionlab too.
+  runuser -u regionlab -- env -i PATH=/usr/local/bin:/usr/bin:/bin LANG=C.UTF-8 \
+    HOME="$DATA_HOME" USER=regionlab LOGNAME=regionlab \
+    XDG_CONFIG_HOME="$DATA_HOME/.config" XDG_CACHE_HOME="$DATA_HOME/.cache" XDG_RUNTIME_DIR=/run/account-region-lab \
+    timeout --kill-after=5s 45s /usr/bin/google-chrome --headless --disable-gpu --no-first-run --no-default-browser-check \
+    --user-data-dir="$DATA_HOME/ci-chrome-smoke" --dump-dom 'data:text/html,<title>arl-ci-rendered</title><p>Local browser test</p>'
+) > "$WORK/chrome.log" 2>&1 || chrome_status=$?
+if ((chrome_status)); then
+  printf 'Non-root Chrome exited with status %s. Sanitized diagnostic excerpt:\n' "$chrome_status" >&2
+  chrome_failure_details >&2
+  exit "$chrome_status"
+fi
+if ! grep -Fq '<title>arl-ci-rendered</title>' "$WORK/chrome.log"; then
+  chrome_failure_details >&2
+  printf '%s\n' 'Chrome did not return the synthetic HTML document.' >&2
+  exit 1
+fi
 
 progress 'reinstallation preserves credentials and private data'
 printf '%s\n' 'installer-ci-data-preservation-canary' > "$DATA_HOME/data/installer-ci-canary"

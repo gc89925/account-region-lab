@@ -83,7 +83,7 @@ test('host validation accepts public IPv4 and DNS, and rejects unsupported IPv6,
   ]) {
     const result = run('validate_host "$1"', [host], env);
     succeeded(result);
-    assert.deepEqual(result.stdout.trim().split('\n'), expected);
+    assert.deepEqual(result.stdout.trim().split(/\r?\n/), expected);
   }
   for (const host of ['127.0.0.1', '10.0.0.1', '::1', '2606:4700:4700::1111', '[2606:4700:4700::1111]', 'localhost', 'a.local', 'a.test',
     'https://lab.example.com', 'lab.example.com:443', 'lab.example.com/path',
