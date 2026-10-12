@@ -842,6 +842,19 @@ function resetProxyImport() {
   $('#proxy-import-status').hidden = true;
 }
 
+function clearProfileFormSecrets() {
+  resetProxyImport();
+  $('#proxy-password').value = '';
+  resetProxyOptions();
+  resetProxyDiagnosis();
+}
+
+function closeDialog(dialog) {
+  // The native close event is queued; clear credentials before the form becomes hidden.
+  if (dialog.id === 'profile-dialog') clearProfileFormSecrets();
+  dialog.close();
+}
+
 function applyImportedProxy(index) {
   const field = $('#profile-proxy');
   const status = $('#proxy-import-status');
@@ -918,7 +931,7 @@ async function closeProfileForEdit() {
   await profileAction(profile, button, 'close', {}, () => {
     const current = state.profiles.find(item => item.id === profile.id);
     if (!current || profileLocked(current)) return;
-    $('#profile-dialog').close();
+    closeDialog($('#profile-dialog'));
     openProfileDialog(current, { focusProxy: true, message: '浏览器已关闭，登录目录保留。现在可以替换或清空代理。' });
     $('#profile-label').value = label;
   });
@@ -1438,7 +1451,7 @@ async function saveForm({ event, form, button, errorElement, dialog, path, metho
   button.textContent = '保存中…';
   try {
     const result = await api(path, { method, body: JSON.stringify(body) });
-    dialog.close();
+    closeDialog(dialog);
     await loadState().catch(() => {});
     onSaved?.(result);
     toast(success);
@@ -1506,7 +1519,11 @@ $('#profile-proxy').addEventListener('input', (event) => {
   resetProxyImport();
   if (field.value.includes('@') || /^(?:[^:/\s]+|\[[^\]]+\]):\d+:[^:]+:/.test(field.value)) importProxyCredentials(field.value);
 });
-$('#profile-dialog').addEventListener('close', () => { resetProxyImport(); $('#proxy-password').value = ''; resetProxyOptions(); resetProxyDiagnosis(); });
+$('#profile-dialog').addEventListener('cancel', clearProfileFormSecrets);
+$('#profile-dialog').addEventListener('close', () => {
+  // An earlier close must not clear a form that has already been reopened.
+  if (!$('#profile-dialog').open) clearProfileFormSecrets();
+});
 for (const input of proxyOptionInputs()) {
   for (const event of ['input', 'change']) input.addEventListener(event, () => {
     proxyOptionsDirty.add(input.dataset.proxyOption);
@@ -1563,7 +1580,7 @@ $('#catalog-source').addEventListener('change', () => {
   loadCatalog();
 });
 $('#find-public-proxy').addEventListener('click', () => {
-  $('#profile-dialog').close();
+  closeDialog($('#profile-dialog'));
   $('#catalog').scrollIntoView({ block: 'start', behavior: 'smooth' });
   if (!loadingCatalog) { $('#catalog-source').value = 'free'; updateCatalogSource(); loadCatalog(); }
 });
@@ -1572,7 +1589,7 @@ $('#open-devices').addEventListener('click', (event) => {
   const profile = state.profiles.find((item) => item.id === reviewingProfileId);
   if (profile) launchTarget(profile, 'devices', event.currentTarget);
 });
-document.querySelectorAll('[data-close]').forEach((button) => button.addEventListener('click', () => document.getElementById(button.dataset.close).close()));
+document.querySelectorAll('[data-close]').forEach((button) => button.addEventListener('click', () => closeDialog(document.getElementById(button.dataset.close))));
 
 $('#profile-form').addEventListener('submit', (event) => {
   if (!requireAppliedProxyOptions()) { event.preventDefault(); return; }

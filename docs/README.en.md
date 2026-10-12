@@ -4,7 +4,21 @@ A local workbench for your own browser profiles, fixed proxy routes, environment
 
 **This does not change Google account country, verify residential IPs, or hide browser automation.** Seven days is an observation interval, not a Google eligibility rule.
 
-## Run
+## One-command server installation
+
+Use Ubuntu 24.04 on x86_64 or ARM64. Allow inbound TCP 80/443 in your cloud firewall. A domain, if used, must already resolve to your server. Run in your server's SSH terminal:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/gc89925/account-region-lab/v0.10.0/deploy/linux/install.sh -o /tmp/account-region-lab-install.sh && sudo bash /tmp/account-region-lab-install.sh
+```
+
+Enter your own public IP or domain, or append `--host YOUR_PUBLIC_IP_OR_DOMAIN` for unattended installation. The script installs official native Chrome, isolated Node 24, per-profile desktops, an authenticated gateway, nginx, HTTPS, renewal and startup services. Review the downloaded script before executing it if desired.
+
+Retrieve the randomly generated first-install login with `sudo cat /root/account-region-lab-credentials.txt`. No shared/default password or private proxy is included. Reruns preserve credentials and browser data; upgrades briefly close account browsers. The installer does not alter SSH or firewall settings. Existing nginx sites are retained; Apache/Caddy port conflicts require manual preparation.
+
+Start with at least 4 GB RAM and sufficient CPU for your pages; five environments is a software limit, not a performance promise. See the [deployment guide](server-deployment.md).
+
+## Run locally
 
 Install Node.js 24, Chrome or Edge, and make `curl` available.
 

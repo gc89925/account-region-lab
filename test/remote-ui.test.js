@@ -305,7 +305,30 @@ test('proxy settings can be replaced after close, pasted residential sessions st
   assert.equal(await page.locator('#proxy-username').inputValue(), '');
   assert.equal(await page.locator('#proxy-password').inputValue(), '');
   assert.equal(await page.locator('#clear-proxy-auth').isChecked(), true, 'selecting an anonymous candidate cannot inherit credentials from the previous candidate');
-  await page.getByRole('button', { name: '关闭环境设置', exact: true }).click();
+  await paste(prefix + syntheticPasswords[0]);
+  const immediateClose = await page.evaluate(() => {
+    document.querySelector('[data-close="profile-dialog"]').click();
+    return { open: document.querySelector('#profile-dialog').open, password: document.querySelector('#proxy-password').value, choices: document.querySelector('#proxy-import-choice').options.length };
+  });
+  assert.deepEqual(immediateClose, { open: false, password: '', choices: 0 }, 'closing clears credentials synchronously, before the queued close event');
+
+  await edit();
+  await paste(prefix + syntheticPasswords[0]);
+  await page.evaluate(value => {
+    const dialog = document.querySelector('#profile-dialog');
+    window.previousProfileCloseDelivered = false;
+    dialog.addEventListener('close', () => { window.previousProfileCloseDelivered = true; }, { once: true });
+    document.querySelector('[data-close="profile-dialog"]').click();
+    document.querySelector('#new-profile').click();
+    const clipboardData = new DataTransfer(); clipboardData.setData('text/plain', value);
+    document.querySelector('#profile-proxy').dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData }));
+  }, prefix + syntheticPasswords[1]);
+  await page.waitForFunction(() => window.previousProfileCloseDelivered);
+  assert.equal(await page.locator('#proxy-password').inputValue(), syntheticPasswords[1], 'an earlier queued close cannot erase a newly opened form');
+  assert.equal(await page.locator('#proxy-import-choice option').count(), 1);
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => !document.querySelector('#profile-dialog').open);
+  assert.equal(await page.locator('#proxy-password').inputValue(), '', 'Escape also clears imported credentials');
 
   assert.equal(await page.locator('#catalog-country').inputValue(), 'ALL');
   assert.ok(await page.locator('#catalog-country option').count() >= 240);

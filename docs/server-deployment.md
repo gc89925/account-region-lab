@@ -45,6 +45,43 @@ Chrome 必须由 `regionlab` 运行并保留浏览器沙箱。不要添加 `--no
 
 ## 安装模板
 
+### 一键安装
+
+`deploy/linux/install.sh` 适用于 Ubuntu 24.04 的 amd64、arm64。需要 root/sudo、可用的系统软件源、可访问 GitHub/Google/Node.js/Let's Encrypt，以及公网可达的 80/443 端口。脚本自动识别 CPU 架构，安装官方原生 Chrome，无需 snap 或 x86 模拟。
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/gc89925/account-region-lab/v0.10.0/deploy/linux/install.sh -o /tmp/account-region-lab-install.sh
+sudo bash /tmp/account-region-lab-install.sh
+```
+
+默认询问自己的公网 IP 或域名；不会猜测公网 IP，也不会把部署者信息写回 GitHub。非交互部署示例：
+
+```bash
+sudo bash /tmp/account-region-lab-install.sh --host lab.example.com --max-environments 3
+```
+
+将示例域名换成自己的域名并预先配置 DNS。本版安装器支持公网 IPv4 或域名，不带 `https://`、端口或路径；纯 IPv6 部署请使用手工模板。IP 证书使用 Let's Encrypt 短有效期配置，必须保持 80 端口可达以便续期。脚本安装独立 Certbot，每 12 小时检查续期，成功后重载 nginx。
+
+首次账号默认为 `admin`，随机密码保存在 `/root/account-region-lab-credentials.txt`（0600），使用 `sudo cat` 查看。该文件属于本机私密数据，不要上传或粘贴到 Issue。服务端只保存 scrypt 哈希；重新安装保留已有账号。手工部署已经有 `access.json` 时，继续使用原账号，不另外生成密码。
+
+可选参数：`--username NAME` 只影响初次创建；`--max-environments 1..5`；`--ref TAG_OR_COMMIT`；`--check` 仅验证平台、参数和本地前置条件。`--check` 不证明 DNS、公网端口或 ACME 可用。默认下载固定的 v0.10.0，`--ref main` 可选择开发分支；下载时先解析为完整 commit 再获取源码。Node 下载校验官方 SHA-256，浏览器取 Google HTTPS 官方包。
+
+重复运行默认复用现有地址和并发上限。正式升级前应先关闭浏览器并备份整个 `/var/lib/account-region-lab`。脚本先准备源码和依赖，证书成功后切换应用；此前的代码和配置保存在 `/opt/account-region-lab/backups/install.*`，激活失败时尝试恢复旧应用和配置。系统包升级和已写入的数据不在该回退范围内；恢复后仍需核验服务。不要用此脚本自动更换已有 nginx 公网主机名。
+
+脚本仅管理本项目两个服务及证书续期计时器，不修改 SSH、防火墙、swap 或其他 nginx 站点，不安装代理节点。原生 Chrome 由独立 `regionlab` 用户运行，保留沙箱。若 80/443 被其他服务器软件占用，或 AppArmor 拒绝非 root Chrome，请先修复具体冲突，不应禁用全局安全策略。源码目录应由 root 管理，账号数据独立存放。
+
+安装验证与日志：
+
+```bash
+sudo systemctl status account-region-lab account-region-lab-gateway --no-pager
+sudo systemctl list-timers account-region-lab-certificate.timer
+sudo journalctl -u account-region-lab -u account-region-lab-gateway -n 80 --no-pager
+```
+
+打开工作台后配置自己的代理，实际启动一个环境并查看远程画面，再逐步增加并发。安装器的健康检查只证明控制服务和网关可用，不把端口监听当成 Chrome 或 Google 登录成功。
+
+### 手工安装
+
 以下步骤需要部署者已有服务器管理权限。TLS 证书、DNS、防火墙及 nginx 主机配置由部署者单独准备；仓库模板不会修改其他网站。
 
 1. 创建 `regionlab` 系统用户，并建立上表目录。该用户不需要可交互的 SSH 登录 shell。把仓库复制到 `/opt/account-region-lab/app`，把经校验的 Node.js 24 安装到 `/opt/account-region-lab/node`。安装生产依赖时使用这一运行时，避免替换其他项目使用的系统 Node。

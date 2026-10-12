@@ -6,7 +6,7 @@ Local browser profiles, proxy checks, device-review guidance, and country-associ
 
 [English guide](docs/README.en.md) · [调研依据](docs/research.md) · [fanout 接入](docs/fanout.md) · [验证范围](docs/verification.md) · [贡献指南](CONTRIBUTING.md)
 
-## v0.9 能做什么
+## v0.10 能做什么
 
 | 功能 | 实际行为 |
 | --- | --- |
@@ -30,7 +30,29 @@ Local browser profiles, proxy checks, device-review guidance, and country-associ
 
 运行中的主按钮显示“继续使用”，只连接现有画面，不创建新页面、不重跑线路检查。Gmail 等入口明确在新标签打开；连续误点不会重复启动。打开同环境的独立窗口会断开重复的嵌入画面，其他环境保持连接。新增[可选 TigerVNC 显示后端](docs/desktop-backends.md)供实测对比，默认显示方案不变；不启用强制后台标签回收，不修改已有页面内容。
 
-## 快速开始
+## 一键部署到自己的服务器
+
+支持 **Ubuntu 24.04，x86_64 / ARM64**。先在云平台安全组放行 TCP **80、443**；使用域名时，先把 DNS 指向自己的服务器。已有网站使用 nginx 时可共存，不支持自动接管 Apache/Caddy 占用的端口。
+
+在服务器 SSH 终端执行下面一行，按提示填写**自己的公网 IP 或域名**：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/gc89925/account-region-lab/v0.10.0/deploy/linux/install.sh -o /tmp/account-region-lab-install.sh && sudo bash /tmp/account-region-lab-install.sh
+```
+
+脚本安装对应架构的官方 Chrome、独立 Node.js、独立远程桌面、登录网关、nginx、HTTPS 证书及自动续期，并启用开机启动。下载的脚本保存在本机，可先阅读后执行；非交互安装用 `--host YOUR_PUBLIC_IP_OR_DOMAIN`，参数不需要住宅代理或 Google 密码。
+
+安装完成后访问打印出的 HTTPS 地址。首次随机生成工作台密码，通过以下命令在**自己的服务器终端**查看：
+
+```bash
+sudo cat /root/account-region-lab-credentials.txt
+```
+
+默认用户是 `admin`。密码不随项目发布，不显示在普通安装日志中；重新执行会保留原密码、代理配置和浏览器目录。升级会短暂关闭正在运行的账号浏览器，完成后从工作台重新打开。代理由每位用户自行配置，项目不附赠任何私人线路。
+
+建议从 4 GB 内存起步；3–5 个大型网页同时加载需要更多 CPU。单核/1 GB 机器不适合多开 Gmail。脚本不修改 SSH、系统防火墙或其他网站配置；**不是完整服务器备份工具**。[完整部署、升级与故障说明](docs/server-deployment.md#一键安装)。
+
+## 本机快速开始
 
 需要 Node.js **24**、`curl` 和已安装的 Chrome 或 Edge。受控模式复用本机浏览器，不下载额外 Chromium。
 

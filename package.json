@@ -1,6 +1,6 @@
 {
   "name": "account-region-lab",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "private": true,
   "type": "module",
   "description": "Local isolated browser profiles and evidence-based Google country observation",
@@ -12,7 +12,8 @@
     "stop": "node scripts/launch.js --stop",
     "status": "node scripts/launch.js --status",
     "serve": "node scripts/launch.js --foreground --no-open",
-    "test": "node --test"
+    "test": "node --test",
+    "check:public": "node scripts/check-public-files.mjs"
   },
   "license": "MIT",
   "repository": {

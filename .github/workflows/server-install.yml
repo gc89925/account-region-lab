@@ -1,0 +1,32 @@
+name: Server installer (Ubuntu 24.04 amd64)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'deploy/linux/**'
+      - 'test/fixtures/installer-ci.sh'
+      - '.github/workflows/server-install.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    if: github.repository == 'gc89925/account-region-lab'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install, authenticate, reinstall, and exercise rollback
+        env:
+          ARL_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: |
+          sudo env GITHUB_ACTIONS="$GITHUB_ACTIONS" \
+            ARL_RUNNER_ENVIRONMENT="$ARL_RUNNER_ENVIRONMENT" \
+            bash test/fixtures/installer-ci.sh "$GITHUB_SHA"
+      # Credentials, generated CA keys, browser directories and private logs
+      # deliberately stay on the disposable VM. Do not upload artifacts here.

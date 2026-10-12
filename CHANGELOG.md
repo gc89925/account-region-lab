@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.10.0 — 2026-10-12
+
+- Add an Ubuntu 24.04 server installer for amd64 and arm64: native Chrome, isolated Node, private desktops, authenticated HTTPS gateway, certificate renewal and startup services.
+- Accept each deployer's own IP/domain, generate a private random first-install password, retain existing account data, and stage upgrades with application/configuration rollback.
+- Add a tracked-file publication check and CI gate for private keys, credential files, browser databases, backup archives and credential literals; reports omit matched values.
+- Expand ignore rules and document server deployment, upgrade limits and public-repository privacy.
+- Clear proxy-import credentials synchronously when closing the editor; an old queued close event cannot erase a newly opened draft.
+
 ## 0.4.0 — 2026-10-06
 
 - Run persistent native Chrome on a Linux server and operate it through an embedded noVNC desktop. One active environment at a time, with explicit close and preserved account directories.

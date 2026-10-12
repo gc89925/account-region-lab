@@ -17,4 +17,7 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm run check:public
       - run: npm test
+      - if: runner.os == 'Linux'
+        run: bash -n deploy/linux/install.sh
