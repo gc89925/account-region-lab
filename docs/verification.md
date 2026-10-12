@@ -1,5 +1,17 @@
 # 验证记录
 
+## v0.10.0
+
+日期：2026-10-12（America/New_York）。
+
+- GitHub Actions Windows：246 项，238 通过、8 项平台条件跳过；Linux：256 项，255 通过、1 项 Windows 条件跳过；均无失败。公开文件检查通过。
+- Ubuntu 24.04 amd64 临时机器实际完成首次安装、HTTPS 网关、随机密码登录、非 root Chrome 沙箱启动、重复安装保留凭证和数据，以及激活后模拟 HTTPS 检查失败再恢复旧应用和服务。
+- 安装集成测试仅以临时自建 CA 代替 ACME 发证，仍执行真实 TLS 证书校验；不宣称测试了公网 DNS、云安全组或 Let's Encrypt 实际签发。ARM64 下载路径和架构选择已实现，但本次完整自动安装流程仅在 amd64 运行。
+- 关闭代理编辑框时同步清空导入密码；确定性界面测试验证关闭后立即重开不会被排队的旧关闭事件清掉新草稿。
+- 审核发布前全部 19 个可达提交及 Release/Issue 公开内容，未发现私人住宅代理凭据、私人服务器地址或浏览器数据。自动扫描用于防止后续误提交，不替代对截图、人工备注和历史记录的复核。
+
+验证运行：[Windows / Linux 回归](https://github.com/gc89925/account-region-lab/actions/runs/38223864901)、[Ubuntu 安装与回退](https://github.com/gc89925/account-region-lab/actions/runs/38223864971)。
+
 ## v0.9.0
 
 日期：2026-10-10。
