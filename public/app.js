@@ -15,6 +15,10 @@ let loadingState = null;
 let selectedRemoteProfileId = null;
 let remoteViewerOpen = false;
 let remoteSelectorSignature = '';
+let clipboardSession = null;
+const clipboardRequests = new Set();
+const clipboardMaxBytes = 12288;
+const clipboardMaxRequestBytes = 32768;
 const launchingProfiles = new Set();
 const recentPageRequests = new Map();
 let loadingCatalog = false;
@@ -123,6 +127,120 @@ function remoteCapacity() {
   return { limit, active, starting };
 }
 
+function clipboardTarget(profile) {
+  const path = remoteDesktopPath(profile);
+  if (!path) return null;
+  return new URL(path, window.location.origin).pathname.replace(/\/vnc\.html$/, '/clipboard');
+}
+
+function clipboardSessionIsCurrent(session) {
+  return clipboardSession === session && $('#clipboard-dialog').open
+    && clipboardTarget(state.profiles.find(profile => profile.id === session.profileId)) === session.target;
+}
+
+function clearClipboardDialog() {
+  clipboardSession = null;
+  $('#clipboard-text').value = '';
+  $('#clipboard-error').textContent = '';
+  $('#clipboard-error').hidden = true;
+  $('#clipboard-status').textContent = '';
+  $('#clipboard-context').textContent = '';
+}
+
+function clipboardError(message) {
+  $('#clipboard-error').textContent = message;
+  $('#clipboard-error').hidden = !message;
+}
+
+function updateClipboardControls() {
+  const session = clipboardSession;
+  const text = $('#clipboard-text').value;
+  const bytes = new TextEncoder().encode(text).length;
+  const tooLong = bytes > clipboardMaxBytes;
+  const requestTooLong = new TextEncoder().encode(JSON.stringify({ text, paste: false })).length > clipboardMaxRequestBytes;
+  const stale = session && !clipboardSessionIsCurrent(session);
+  const busy = Boolean(session?.reading || session && clipboardRequests.has(session.target));
+  $('#clipboard-text').disabled = busy || Boolean(stale);
+  $('#read-local-clipboard').disabled = busy || !session || Boolean(stale);
+  for (const id of ['send-clipboard-only', 'send-clipboard-paste']) {
+    document.getElementById(id).disabled = busy || !session || stale || !text.length || tooLong || requestTooLong;
+  }
+  $('#clipboard-byte-count').textContent = `${bytes.toLocaleString()} / 12,288 字节`;
+  $('#clipboard-byte-count').classList.toggle('clipboard-over-limit', tooLong || requestTooLong);
+  $('#clipboard-dialog').setAttribute('aria-busy', String(busy));
+  if (stale) clipboardError('此环境已关闭或重新启动。请关闭此弹窗，刷新状态后重新打开“粘贴文本”。');
+  else if (tooLong) clipboardError('内容超过 12 KB，请缩短文本后再发送。中文等字符会占用多个字节。');
+  else if (requestTooLong) clipboardError('文本包含较多需要转义的特殊字符，发送数据超过限制。请分段发送。');
+}
+
+function openClipboardDialog(profileId) {
+  const profile = state.profiles.find(item => item.id === profileId);
+  const target = clipboardTarget(profile);
+  if (!target) { toast('此环境的远程浏览器暂不可用。请先启动环境，再粘贴文本。', 'error'); return; }
+  clearClipboardDialog();
+  clipboardSession = { profileId, target, label: profile.label, reading: false };
+  $('#clipboard-context').textContent = `发送到：${profile.label} · ${countryLabel(profile.country)}`;
+  $('#clipboard-dialog').showModal();
+  updateClipboardControls();
+  $('#clipboard-text').focus();
+}
+
+async function readLocalClipboard() {
+  const session = clipboardSession;
+  if (!session || !clipboardSessionIsCurrent(session) || session.reading || clipboardRequests.has(session.target)) return;
+  session.reading = true;
+  clipboardError('');
+  updateClipboardControls();
+  try {
+    if (!navigator.clipboard?.readText) throw new Error('unavailable');
+    const text = await navigator.clipboard.readText();
+    if (!clipboardSessionIsCurrent(session)) return;
+    $('#clipboard-text').value = text;
+    $('#clipboard-status').textContent = text ? '已读取本机剪贴板，请检查内容后发送。' : '本机剪贴板没有文本，也可以在此手动输入。';
+  } catch {
+    if (clipboardSessionIsCurrent(session)) clipboardError('浏览器未允许读取本机剪贴板。请点击文本框，按 Ctrl+V（Mac 为 ⌘V）手动粘贴，再点击发送。');
+  } finally {
+    session.reading = false;
+    if (clipboardSessionIsCurrent(session)) { updateClipboardControls(); $('#clipboard-text').focus(); }
+  }
+}
+
+async function sendRemoteClipboard(paste) {
+  const session = clipboardSession;
+  if (!session || !clipboardSessionIsCurrent(session) || session.reading || clipboardRequests.has(session.target)) return;
+  const text = $('#clipboard-text').value;
+  const body = JSON.stringify({ text, paste });
+  if (!text.length || new TextEncoder().encode(text).length > clipboardMaxBytes
+    || new TextEncoder().encode(body).length > clipboardMaxRequestBytes) { updateClipboardControls(); return; }
+  clipboardRequests.add(session.target);
+  clipboardError('');
+  $('#clipboard-status').textContent = '正在发送文本…';
+  updateClipboardControls();
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 15000);
+  try {
+    const response = await fetch(session.target, { method: 'POST', credentials: 'same-origin', cache: 'no-store',
+      headers: { 'Content-Type': 'application/json' }, body, signal: controller.signal });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || result.ok !== true) throw new Error(result.error || `发送失败（${response.status}），请刷新状态后重试。`);
+    if (!clipboardSessionIsCurrent(session)) return;
+    closeDialog($('#clipboard-dialog'));
+    toast(paste && result.pasted
+      ? `已向“${session.label}”发送粘贴快捷键，请检查远程输入框；未提交表单。`
+      : `已复制到“${session.label}”的远程剪贴板，请在远程输入框按 Ctrl+V；内容约保留 2 分钟。`);
+  } catch (error) {
+    if (clipboardSessionIsCurrent(session)) {
+      clipboardError(controller.signal.aborted ? '发送超时。请先检查远程输入框，确认没有粘贴后再重试，避免重复输入。'
+        : error instanceof TypeError ? '无法连接服务器。请检查连接后重试。' : error.message);
+      $('#clipboard-status').textContent = '';
+    }
+  } finally {
+    window.clearTimeout(timeout);
+    clipboardRequests.delete(session.target);
+    if (clipboardSession) updateClipboardControls();
+  }
+}
+
 function closeRemoteDesktop() {
   remoteViewerOpen = false;
   $('#remote-desktop-frame-container').replaceChildren();
@@ -144,6 +262,8 @@ function renderRemoteDesktop() {
   const selected = available.find((profile) => profile.id === selectedRemoteProfileId) || available[0];
   selectedRemoteProfileId = selected?.id || null;
   const path = remoteDesktopPath(selected);
+  $('#open-remote-clipboard').hidden = !path;
+  if (clipboardSession) updateClipboardControls();
   const link = $('#remote-desktop-tab');
   link.hidden = !path;
   if (path) {
@@ -459,6 +579,7 @@ function renderProfile(profile) {
     management.append(actionButton('打开远程浏览器', 'button button-small button-primary', () => openRemoteDesktop(profile.id), false, `打开${profile.label}的远程浏览器`));
     const path = remoteDesktopPath(profile);
     if (path) {
+      management.append(actionButton('粘贴文本', 'button button-small button-outline', () => openClipboardDialog(profile.id), false, `向${profile.label}粘贴文本`));
       const link = element('a', 'button button-small button-outline', '独立窗口 ↗');
       link.href = path; link.target = '_blank'; link.rel = 'noopener noreferrer';
       link.setAttribute('aria-label', `在独立窗口打开${profile.label}`);
@@ -853,6 +974,7 @@ function clearProfileFormSecrets() {
 function closeDialog(dialog) {
   // The native close event is queued; clear credentials before the form becomes hidden.
   if (dialog.id === 'profile-dialog') clearProfileFormSecrets();
+  if (dialog.id === 'clipboard-dialog') clearClipboardDialog();
   dialog.close();
 }
 
@@ -1487,6 +1609,13 @@ $('#hide-remote-desktop').addEventListener('click', () => {
   closeRemoteDesktop();
   $('#open-remote-desktop').focus();
 });
+$('#open-remote-clipboard').addEventListener('click', () => openClipboardDialog(selectedRemoteProfileId));
+$('#read-local-clipboard').addEventListener('click', readLocalClipboard);
+$('#send-clipboard-only').addEventListener('click', () => sendRemoteClipboard(false));
+$('#send-clipboard-paste').addEventListener('click', () => sendRemoteClipboard(true));
+$('#clipboard-text').addEventListener('input', () => { clipboardError(''); updateClipboardControls(); });
+$('#clipboard-dialog').addEventListener('cancel', clearClipboardDialog);
+$('#clipboard-dialog').addEventListener('close', () => { if (!$('#clipboard-dialog').open) clearClipboardDialog(); });
 for (const eventName of ['click', 'auxclick']) $('#remote-desktop-tab').addEventListener(eventName, event => detachInlineDesktop(selectedRemoteProfileId, event));
 function updateCountryDefaults() {
   if (editingProfileId) return;

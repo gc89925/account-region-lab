@@ -7,6 +7,7 @@
     <meta name="theme-color" content="#1e493e">
     <title>账号地区实验室 · Account Region Lab</title>
     <link rel="stylesheet" href="/style.css">
+    <link rel="stylesheet" href="/clipboard.css">
     <script src="/app.js" type="module"></script>
   </head>
   <body>
@@ -55,7 +56,7 @@
       </section>
 
       <section id="remote-browser" class="section-block remote-browser-panel" aria-labelledby="remote-browser-title" hidden>
-        <div class="section-heading"><div><p class="eyebrow">REMOTE BROWSER</p><h2 id="remote-browser-title">远程浏览器</h2><p id="remote-browser-context">在这里操作服务器上的浏览器，完成 Google 登录。</p></div><div class="remote-browser-actions"><a id="remote-desktop-tab" class="button button-small button-outline" target="_blank" rel="noopener noreferrer" hidden>独立窗口 ↗</a><button id="hide-remote-desktop" class="button button-small button-outline" type="button">收起画面</button></div></div>
+        <div class="section-heading"><div><p class="eyebrow">REMOTE BROWSER</p><h2 id="remote-browser-title">远程浏览器</h2><p id="remote-browser-context">在这里操作服务器上的浏览器，完成 Google 登录。</p></div><div class="remote-browser-actions"><button id="open-remote-clipboard" class="button button-small button-outline" type="button" hidden>粘贴文本</button><a id="remote-desktop-tab" class="button button-small button-outline" target="_blank" rel="noopener noreferrer" hidden>独立窗口 ↗</a><button id="hide-remote-desktop" class="button button-small button-outline" type="button">收起画面</button></div></div>
         <p id="remote-browser-note" class="remote-browser-note">各环境使用独立远程画面。切换或收起画面只断开当前画面，浏览器继续运行。</p>
         <div id="remote-environment-selector" class="remote-environment-selector" role="group" aria-label="选择远程浏览器环境"></div>
         <div id="remote-desktop-frame-container" class="remote-desktop-frame-container"></div>
@@ -101,6 +102,19 @@
       </section>
       <footer class="site-footer"><span>ACCOUNT REGION LAB <span id="app-version"></span></span><a href="https://github.com/gc89925/account-region-lab" target="_blank" rel="noopener noreferrer">GitHub 项目 ↗</a><span id="runtime-footer">本机配置 · 人工观察 · 数据可导出</span></footer>
     </main>
+
+    <dialog id="clipboard-dialog" class="modal clipboard-dialog" aria-labelledby="clipboard-dialog-title" aria-describedby="clipboard-context clipboard-instructions">
+      <div class="modal-heading"><div><p class="eyebrow">PASTE INTO REMOTE BROWSER</p><h2 id="clipboard-dialog-title">粘贴文本</h2></div><button class="icon-button" type="button" data-close="clipboard-dialog" aria-label="关闭粘贴文本">×</button></div>
+      <p id="clipboard-context" class="clipboard-context"></p>
+      <p id="clipboard-instructions" class="modal-intro">先在远程浏览器里点击要填写的输入框，再打开此窗口。把本机复制的内容粘贴到下方，点击“发送并粘贴”。这只发送 Ctrl+V，不会点击提交。</p>
+      <label for="clipboard-text">要粘贴的文本</label>
+      <textarea id="clipboard-text" rows="6" autocomplete="off" spellcheck="false" placeholder="在这里按 Ctrl+V（Mac 为 ⌘V），粘贴本机复制的内容" aria-describedby="clipboard-byte-count clipboard-privacy"></textarea>
+      <div class="clipboard-input-tools"><button id="read-local-clipboard" class="button button-small button-outline" type="button">读取本机剪贴板</button><span id="clipboard-byte-count" class="field-help">0 / 12,288 字节</span></div>
+      <p id="clipboard-privacy" class="field-help">只发送你确认的文本；关闭弹窗会清空输入。远程剪贴板内容约保留 2 分钟，之后仍留在已粘贴的输入框中。</p>
+      <p id="clipboard-status" class="field-help" role="status"></p>
+      <p id="clipboard-error" class="form-error" role="alert" hidden></p>
+      <div class="clipboard-actions"><button class="button button-outline" type="button" data-close="clipboard-dialog">取消</button><button id="send-clipboard-only" class="button button-outline" type="button">复制到远程剪贴板</button><button id="send-clipboard-paste" class="button button-primary" type="button">发送并粘贴</button></div>
+    </dialog>
 
     <dialog id="profile-dialog" class="modal" aria-labelledby="profile-dialog-title">
       <form id="profile-form">

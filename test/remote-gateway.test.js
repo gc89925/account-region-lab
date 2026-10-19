@@ -123,6 +123,7 @@ test('all workbench and desktop resources require authentication and the cookie 
   assert.equal((await f.request('/')).headers.location, '/login');
   assert.equal((await f.request('/api/state')).status, 401);
   assert.equal((await f.request('/desktop/vnc.html')).headers.location, '/login');
+  assert.equal((await f.request('/clipboard.css')).headers.location, '/login');
   assert.equal(f.appRequests.length, 0);
   assert.equal(f.desktopRequests.length, 0);
   const failed = await f.login('wrong');
@@ -137,6 +138,11 @@ test('all workbench and desktop resources require authentication and the cookie 
   assert.equal(f.appRequests[0].headers.host, 'lab.example.test');
   assert.equal(f.appRequests[0].headers.cookie, undefined);
   assert.equal(f.appRequests[0].headers.authorization, undefined);
+  const stylesheet = await f.request('/clipboard.css', { headers: { Cookie: cookie } });
+  assert.equal(stylesheet.status, 200);
+  assert.match(stylesheet.headers['content-type'], /^text\/css/);
+  assert.match(stylesheet.body, /\.clipboard-dialog/);
+  assert.equal((await f.request('/clipboard.css', { method: 'HEAD', headers: { Cookie: cookie } })).body, '');
   assert.equal((await f.request(`${desktopA}/vnc.html?resize=scale`, { headers: { Cookie: cookie } })).body, 'desktop-A');
   assert.equal(f.desktopRequests[0].url, '/vnc.html?resize=scale');
   assert.equal(f.desktopRequests[0].headers.host, `127.0.0.1:${f.desktopPort}`);
@@ -144,6 +150,61 @@ test('all workbench and desktop resources require authentication and the cookie 
   assert.equal(f.lookupRequests[0].headers.host, `127.0.0.1:${f.appPort}`);
   assert.equal(f.lookupRequests[0].headers.cookie, undefined);
   assert.equal(f.lookupRequests[0].headers.origin, undefined);
+});
+
+test('remote clipboard requires authenticated same-origin JSON and preserves text without echoing it', async t => {
+  const sends = [];
+  const f = await fixture(t, { clipboard: { async send(input) { sends.push(input); return { ok: true, pasted: input.paste, persistenceSeconds: 120 }; }, async close() {} } });
+  const text = 'English / 中文 🙂\nSecond line';
+  const body = JSON.stringify({ text, paste: true });
+  const endpoint = `${desktopA}/clipboard`;
+  const headers = { Origin: publicOrigin, 'Content-Type': 'application/json' };
+  assert.equal((await f.request(endpoint, { method: 'POST', body, headers })).status, 401);
+  const cookie = (await f.login()).headers['set-cookie'][0].split(';')[0];
+  headers.Cookie = cookie;
+  assert.equal((await f.request(endpoint, { method: 'POST', body, headers: { ...headers, Origin: 'https://other.invalid' } })).status, 403);
+  assert.equal((await f.request(endpoint, { headers })).status, 405);
+  assert.equal((await f.request(endpoint, { method: 'POST', body, headers: { ...headers, 'Content-Type': 'text/plain' } })).status, 415);
+  assert.equal(sends.length, 0);
+  const result = await f.request(endpoint, { method: 'POST', body, headers });
+  assert.equal(result.status, 200);
+  assert.deepEqual(JSON.parse(result.body), { ok: true, pasted: true, persistenceSeconds: 120 });
+  assert.equal(sends.length, 1);
+  assert.equal(sends[0].profileId, profileA);
+  assert.equal(sends[0].generation, generationA);
+  assert.equal(sends[0].text, text);
+  assert.equal(f.desktopRequests.length, 0, 'clipboard content must not be sent to noVNC HTTP logs');
+  assert.equal(f.appRequests.length, 0, 'clipboard content is not application state');
+  f.routes.delete(internalA);
+  assert.equal((await f.request(endpoint, { method: 'POST', body, headers })).status, 409);
+  assert.equal(sends.length, 1);
+});
+
+test('remote clipboard rejects malformed or oversized input and sanitizes helper failures', async t => {
+  let sends = 0;
+  let closed = 0;
+  let helperStatus;
+  const secret = 'clipboard-content-must-not-appear';
+  const f = await fixture(t, { clipboard: { async send() { sends++; throw Object.assign(new Error(secret), { status: helperStatus }); }, async close() { closed++; } } });
+  const cookie = (await f.login()).headers['set-cookie'][0].split(';')[0];
+  const headers = { Origin: publicOrigin, Cookie: cookie, 'Content-Type': 'application/json' };
+  for (const body of ['[1]', '{', '{}', JSON.stringify({ text: '', paste: false }), JSON.stringify({ text: '\0', paste: false }),
+    JSON.stringify({ text: '中'.repeat(4097), paste: false }), JSON.stringify({ text: 'hello', paste: 'yes' }),
+    JSON.stringify({ text: 'hello', paste: true, display: ':201' })]) {
+    assert.equal((await f.request(`${desktopA}/clipboard`, { method: 'POST', body, headers })).status, 400);
+  }
+  assert.equal((await f.request(`${desktopA}/clipboard`, { method: 'POST', body: 'a'.repeat(32769), headers })).status, 413);
+  assert.equal(sends, 0);
+  const failed = await f.request(`${desktopA}/clipboard`, { method: 'POST', body: JSON.stringify({ text: secret, paste: false }), headers });
+  assert.equal(failed.status, 503);
+  assert.ok(!failed.body.includes(secret));
+  for (helperStatus of [401, 409, 429, 504]) {
+    const response = await f.request(`${desktopA}/clipboard`, { method: 'POST', body: JSON.stringify({ text: secret, paste: false }), headers });
+    assert.equal(response.status, helperStatus);
+    assert.ok(!response.body.includes(secret));
+  }
+  await f.gateway.close();
+  assert.equal(closed, 1);
 });
 
 test('host and origin validation rejects cross-site login and authenticated mutations', async t => {

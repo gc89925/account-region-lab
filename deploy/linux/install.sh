@@ -240,7 +240,7 @@ main() {
   export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l
   say 'Installing system dependencies (other applications are not restarted)...'
   apt-get update -qq
-  apt-get install -y --no-install-recommends ca-certificates curl xz-utils python3-venv xvfb xauth x11-utils openbox x11vnc novnc websockify fonts-noto-cjk fonts-noto-color-emoji nginx
+  apt-get install -y --no-install-recommends ca-certificates curl xz-utils python3-venv xvfb xauth x11-utils xclip xdotool openbox x11vnc novnc websockify fonts-noto-cjk fonts-noto-color-emoji nginx
 
   say 'Downloading the official architecture-specific Node and Chrome builds...'
   local node_name="node-$NODE_VERSION-linux-$NODE_ARCH"
@@ -349,6 +349,8 @@ server {
     ssl_certificate_key $ROOT/acme/config/live/account-region-lab/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
     client_max_body_size 32k;
+    # Keep accepted clipboard JSON in memory instead of request-body temp files.
+    client_body_buffer_size 32k;
     add_header Strict-Transport-Security "max-age=86400" always;
     location / {
         proxy_pass http://127.0.0.1:4318;

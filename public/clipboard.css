@@ -1,0 +1,12 @@
+.clipboard-dialog { width: min(680px, calc(100vw - 32px)); }
+.clipboard-context { padding: 12px 16px; border-radius: 10px; background: #edf3ef; color: #1e493e; font-weight: 600; overflow-wrap: anywhere; }
+.clipboard-dialog textarea { width: 100%; resize: vertical; min-height: 150px; font-size: 16px; line-height: 1.6; }
+.clipboard-input-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; }
+.clipboard-input-tools .field-help { margin: 0; }
+.clipboard-input-tools .clipboard-over-limit { color: #a13832; font-weight: 600; }
+.clipboard-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; margin-top: 24px; }
+.clipboard-dialog .button { white-space: normal; }
+@media (max-width: 520px) {
+  .clipboard-actions { display: grid; grid-template-columns: 1fr; }
+  .clipboard-input-tools { align-items: flex-start; }
+}
