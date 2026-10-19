@@ -59,6 +59,18 @@ test('failed navigation is not a successful login and retains the reusable conte
   contexts[0].emit('close'); assert.equal(launcher.isActive(ID), false);
 });
 
+test('payment settings open in the same managed profile and proxy as existing tabs', async t => {
+  const { launcher, options, calls, contexts } = await fixture(t);
+  await launcher.open(options);
+  const url = 'https://payments.google.com/payments/home#settings';
+  assert.deepEqual(await launcher.open({ ...options, url }), { ok: true });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].directory, options.profileDir);
+  assert.equal(calls[0].options.proxy.server, options.profile.proxy);
+  assert.equal(contexts[0].pages.at(-1).url, url);
+  await launcher.closeAll();
+});
+
 test('failed starts are sanitized and release the active slot for retry', async t => {
   const { launcher, options, behavior } = await fixture(t, { launchError: true });
   const result = await launcher.open(options);

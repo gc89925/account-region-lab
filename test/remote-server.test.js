@@ -137,14 +137,15 @@ test('remote launches use the remote launcher for both engines and reuse the sam
   const app = await fixture(t);
   const native = await app.create({ label: 'Native remote' });
   const route = `/api/profiles/${native.id}`;
-  for (const target of ['signin', 'gmail', 'youtube']) {
+  for (const target of ['signin', 'gmail', 'youtube', 'payments']) {
     const opened = await app.post(route + '/launch', { target });
     assert.equal(opened.status, 200, opened.raw);
     assert.match(opened.value.message, /服务器打开浏览器/);
     assert.equal(opened.value.profile.session.active, true);
     assert.equal(opened.value.profile.session.managed, true);
   }
-  assert.deepEqual(app.calls.remote.map(call => call.url), ['https://accounts.google.com/', 'https://mail.google.com/', 'https://www.youtube.com/']);
+  assert.deepEqual(app.calls.remote.map(call => call.url), ['https://accounts.google.com/', 'https://mail.google.com/', 'https://www.youtube.com/', 'https://payments.google.com/payments/home#settings']);
+  assert.deepEqual(app.calls.destinations.at(-1), { proxy: TARGET_PROXY, url: 'https://payments.google.com/payments/home#settings' });
   assert.equal(new Set(app.calls.remote.map(call => call.profileDir)).size, 1);
   assert.equal(app.calls.remote[0].profileDir, path.join(app.dataDir, 'profiles', native.id));
   assert.ok(app.calls.remote.every(call => call.profile.proxy === TARGET_PROXY && call.browserPath === '/test/chromium'));

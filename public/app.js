@@ -443,6 +443,7 @@ function renderProfile(profile) {
     actionButton(remoteBrowserEnabled() ? 'Gmail · 新标签 ↗' : 'Gmail ↗', 'quick-link', (button) => launchTarget(profile, 'gmail', button), busy, `在${profile.label}环境${remoteBrowserEnabled() ? '新标签中' : ''}打开Gmail`),
     actionButton(remoteBrowserEnabled() ? 'YouTube · 新标签 ↗' : 'YouTube ↗', 'quick-link', (button) => launchTarget(profile, 'youtube', button), busy, `在${profile.label}环境${remoteBrowserEnabled() ? '新标签中' : ''}打开YouTube`),
     actionButton(remoteBrowserEnabled() ? '条款页 · 新标签 ↗' : '条款页 / 查看地区 ↗', 'quick-link', (button) => launchTarget(profile, 'terms', button), busy, `在${profile.label}环境${remoteBrowserEnabled() ? '新标签中' : ''}打开Google服务条款页`),
+    actionButton(remoteBrowserEnabled() ? '付款资料 · 新标签 ↗' : '付款资料 ↗', 'quick-link', (button) => launchTarget(profile, 'payments', button), busy, `在${profile.label}环境${remoteBrowserEnabled() ? '新标签中' : ''}打开Google付款资料`),
     actionButton(remoteBrowserEnabled() ? '变更申请 · 新标签 ↗' : '官方变更申请 ↗', 'quick-link', (button) => launchTarget(profile, 'appeal', button), busy, `在${profile.label}环境${remoteBrowserEnabled() ? '新标签中' : ''}打开官方国家地区变更申请`)
   );
   card.append(actions, quick);
@@ -541,7 +542,7 @@ async function launchTarget(profile, target, button) {
   }
   if (!prepareNetworkAction(profile, { browser: true })) return;
   const remote = remoteBrowserEnabled();
-  const names = { signin: 'Google 登录页', gmail: 'Gmail', youtube: 'YouTube', terms: 'Google 服务条款页', appeal: '官方国家/地区变更申请', devices: 'Google 官方设备管理页', diagnostics: `${remote ? '服务器' : '本机'}环境诊断页（未执行出口国家检查）` };
+  const names = { signin: 'Google 登录页', gmail: 'Gmail', youtube: 'YouTube', payments: 'Google 付款资料', terms: 'Google 服务条款页', appeal: '官方国家/地区变更申请', devices: 'Google 官方设备管理页', diagnostics: `${remote ? '服务器' : '本机'}环境诊断页（未执行出口国家检查）` };
   launchingProfiles.add(profile.id);
   try { return await profileAction(profile, button, 'launch', { target }, (result) => {
     if (remote) recentPageRequests.set(requestKey, Date.now());
